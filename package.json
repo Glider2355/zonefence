@@ -41,12 +41,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/USERNAME/zonefence.git"
+    "url": "git+https://github.com/Glider2355/zonefence.git"
   },
   "bugs": {
-    "url": "https://github.com/USERNAME/zonefence/issues"
+    "url": "https://github.com/Glider2355/zonefence/issues"
   },
-  "homepage": "https://github.com/USERNAME/zonefence#readme",
+  "homepage": "https://github.com/Glider2355/zonefence#readme",
   "engines": {
     "node": ">=18.0.0"
   },
