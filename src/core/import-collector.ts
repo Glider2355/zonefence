@@ -84,17 +84,23 @@ function resolveModulePath(
 	return null;
 }
 
-function isExternalImport(moduleSpecifier: string, resolvedPath: string | null): boolean {
-	// If we have a resolved path, it's not external
-	if (resolvedPath !== null) {
-		return false;
-	}
-
-	// If it starts with . or /, it's a local import (even if unresolved)
+/** @internal Exported for testing */
+export function isExternalImport(moduleSpecifier: string, resolvedPath: string | null): boolean {
+	// If it starts with . or /, it's a local import
 	if (moduleSpecifier.startsWith(".") || moduleSpecifier.startsWith("/")) {
 		return false;
 	}
 
-	// Otherwise, it's an external package
+	// If resolved path contains node_modules, it's an external package
+	if (resolvedPath?.includes("node_modules")) {
+		return true;
+	}
+
+	// If we have a resolved path that's not in node_modules, it's local
+	if (resolvedPath !== null) {
+		return false;
+	}
+
+	// Otherwise, it's an external package (unresolved bare specifier)
 	return true;
 }
