@@ -30,11 +30,37 @@ function findTsConfig(startDir: string): string | undefined {
 }
 
 /**
- * Extract paths mapping from ts-morph project
+ * Extract paths mapping from ts-morph project, adjusted for rootDir
  */
-function getPathsMapping(project: Project): PathsMapping | undefined {
+function getPathsMapping(
+	project: Project,
+	rootDir: string,
+	tsConfigFilePath?: string,
+): PathsMapping | undefined {
 	const compilerOptions = project.getCompilerOptions();
-	return compilerOptions?.paths as PathsMapping | undefined;
+	const originalPaths = compilerOptions?.paths as PathsMapping | undefined;
+
+	if (!originalPaths || !tsConfigFilePath) {
+		return originalPaths;
+	}
+
+	// tsconfig.json directory
+	const tsConfigDir = path.dirname(tsConfigFilePath);
+
+	// Adjust paths targets to be relative to rootDir
+	const adjustedPaths: PathsMapping = {};
+	for (const [alias, targets] of Object.entries(originalPaths)) {
+		adjustedPaths[alias] = targets.map((target) => {
+			// target is relative to tsconfig.json (e.g., "./src/*")
+			const targetWithoutGlob = target.replace(/\*$/, "");
+			const absoluteTarget = path.resolve(tsConfigDir, targetWithoutGlob);
+			const relativeToRoot = path.relative(rootDir, absoluteTarget);
+			// Add back the glob if it existed
+			return (relativeToRoot || ".") + (target.endsWith("*") ? "/*" : "");
+		});
+	}
+
+	return adjustedPaths;
 }
 
 export async function checkCommand(targetPath: string, options: CheckOptions): Promise<void> {
@@ -62,7 +88,7 @@ export async function checkCommand(targetPath: string, options: CheckOptions): P
 		const resolvedRules = resolveRules(rulesByDir);
 
 		// Get paths mapping from tsconfig for pattern resolution
-		const pathsMapping = getPathsMapping(project);
+		const pathsMapping = getPathsMapping(project, absolutePath, tsConfigFilePath);
 
 		const results = evaluate(imports, resolvedRules, absolutePath, { pathsMapping });
 

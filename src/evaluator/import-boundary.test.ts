@@ -332,5 +332,42 @@ describe("matchesPattern - path alias resolution with pathsMapping", () => {
 			const result = evaluateImportBoundary(importInfo, rules, rootDir, { pathsMapping });
 			expect(result).toBeNull();
 		});
+
+		it("should match user's exact case: deep nested path in monorepo", () => {
+			// Exact reproduction of user's error case
+			// rootDir is packages/backend/src (where zonefence check ./src is run)
+			const monorepoRootDir = "/project/packages/backend/src";
+			// pathsMapping is adjusted: "@/*": ["./src/*"] becomes "@/*": ["./*"]
+			// because tsconfig is in packages/backend and rootDir is packages/backend/src
+			const adjustedPathsMapping = {
+				"@/*": ["./*"],
+			};
+			const importInfo: ImportInfo = {
+				moduleSpecifier: "./handler",
+				sourceFile: "/project/packages/backend/src/api/routes/novel/public/novels/get/index.ts",
+				resolvedPath: "/project/packages/backend/src/api/routes/novel/public/novels/get/handler.ts",
+				isExternal: false,
+				line: 1,
+				column: 0,
+			};
+			const rules: ResolvedRule[] = [
+				{
+					directory: "/project/packages/backend/src/api",
+					ruleFilePath: "/project/packages/backend/src/api/zonefence.yaml",
+					excludePatterns: [],
+					config: {
+						version: 1,
+						imports: {
+							mode: "allow-first",
+							allow: [{ from: "@/api/**" }],
+						},
+					},
+				},
+			];
+			const result = evaluateImportBoundary(importInfo, rules, monorepoRootDir, {
+				pathsMapping: adjustedPathsMapping,
+			});
+			expect(result).toBeNull();
+		});
 	});
 });
