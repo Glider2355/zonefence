@@ -109,9 +109,9 @@ imports:
 
 ```
 src/
-├── .zonefence.yaml        # 親ルール（scope.apply: descendants）
+├── zonefence.yaml         # 親ルール（scope.apply: descendants）
 └── domain/
-    └── .zonefence.yaml    # 子ルール（親ルールを継承＋追加）
+    └── zonefence.yaml     # 子ルール（親ルールを継承＋追加）
 ```
 
 `scope.apply: self` を指定すると、そのルールは自フォルダのみに適用され、子フォルダには継承されません。
@@ -122,7 +122,7 @@ src/
 src/domain/user/UserService.ts
   12:1  error  Import from "axios" is not allowed  (import-boundary)
     Design intent: Domain層は外部依存を持たない純粋な層です
-    Rule: src/domain/.zonefence.yaml
+    Rule: src/domain/zonefence.yaml
 
 ✖ 1 error in 1 file
 ```

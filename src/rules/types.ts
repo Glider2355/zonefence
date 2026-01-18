@@ -23,7 +23,7 @@ export interface ZoneFenceConfig {
 export interface ResolvedRule {
 	/** The directory path where this rule applies */
 	directory: string;
-	/** The path to the .zonefence.yaml file that defined this rule */
+	/** The path to the zonefence.yaml file that defined this rule */
 	ruleFilePath: string;
 	/** The resolved configuration (after inheritance) */
 	config: ZoneFenceConfig;
