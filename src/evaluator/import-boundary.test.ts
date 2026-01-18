@@ -285,3 +285,52 @@ describe("matchesPattern - internal paths", () => {
 		});
 	});
 });
+
+describe("matchesPattern - path alias resolution with pathsMapping", () => {
+	const rootDir = "/project";
+	const pathsMapping = {
+		"@/*": ["./src/*"],
+		"@api/*": ["./src/api/*"],
+	};
+
+	describe("pattern resolution", () => {
+		it("should match resolved path when pattern uses alias @/api/**", () => {
+			// Pattern @/api/** should resolve to src/api/** and match src/api/routes/handler.ts
+			const importInfo = createInternalImport("./handler", "/project/src/api/routes/handler.ts");
+			const rules = createRule({ allow: ["@/api/**"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir, { pathsMapping });
+			expect(result).toBeNull();
+		});
+
+		it("should match resolved path with deeper nesting", () => {
+			const importInfo = createInternalImport(
+				"./handler",
+				"/project/src/api/routes/novel/likes/add/handler.ts",
+			);
+			const rules = createRule({ allow: ["@/api/**"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir, { pathsMapping });
+			expect(result).toBeNull();
+		});
+
+		it("should match with @api/* alias pattern", () => {
+			const importInfo = createInternalImport("./handler", "/project/src/api/routes/handler.ts");
+			const rules = createRule({ allow: ["@api/**"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir, { pathsMapping });
+			expect(result).toBeNull();
+		});
+
+		it("should NOT match when path is outside the alias scope", () => {
+			const importInfo = createInternalImport("./helper", "/project/src/utils/helper.ts");
+			const rules = createRule({ allow: ["@/api/**"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir, { pathsMapping });
+			expect(result).not.toBeNull();
+		});
+
+		it("should work with multiple patterns", () => {
+			const importInfo = createInternalImport("./handler", "/project/src/api/routes/handler.ts");
+			const rules = createRule({ allow: ["@/shared/**", "@/api/**"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir, { pathsMapping });
+			expect(result).toBeNull();
+		});
+	});
+});

@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { Project } from "ts-morph";
 import { collectImports } from "../../core/import-collector.js";
 import { createProject } from "../../core/project.js";
 import { evaluate } from "../../evaluator/index.js";
+import type { PathsMapping } from "../../evaluator/types.js";
 import { reportToConsole } from "../../reporter/console.js";
 import { loadRulesForDirectory } from "../../rules/loader.js";
 import { resolveRules } from "../../rules/resolver.js";
@@ -25,6 +27,14 @@ function findTsConfig(startDir: string): string | undefined {
 		dir = path.dirname(dir);
 	}
 	return undefined;
+}
+
+/**
+ * Extract paths mapping from ts-morph project
+ */
+function getPathsMapping(project: Project): PathsMapping | undefined {
+	const compilerOptions = project.getCompilerOptions();
+	return compilerOptions?.paths as PathsMapping | undefined;
 }
 
 export async function checkCommand(targetPath: string, options: CheckOptions): Promise<void> {
@@ -51,7 +61,10 @@ export async function checkCommand(targetPath: string, options: CheckOptions): P
 		const rulesByDir = await loadRulesForDirectory(absolutePath);
 		const resolvedRules = resolveRules(rulesByDir);
 
-		const results = evaluate(imports, resolvedRules, absolutePath);
+		// Get paths mapping from tsconfig for pattern resolution
+		const pathsMapping = getPathsMapping(project);
+
+		const results = evaluate(imports, resolvedRules, absolutePath, { pathsMapping });
 
 		const exitCode = reportToConsole(results, {
 			color: options.color !== false,

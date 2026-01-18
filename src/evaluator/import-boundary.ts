@@ -2,12 +2,13 @@ import path from "node:path";
 import { minimatch } from "minimatch";
 import type { ImportInfo } from "../core/types.js";
 import type { ImportRule, ResolvedRule } from "../rules/types.js";
-import type { Violation } from "./types.js";
+import type { EvaluateOptions, PathsMapping, Violation } from "./types.js";
 
 export function evaluateImportBoundary(
 	importInfo: ImportInfo,
 	rules: ResolvedRule[],
 	rootDir: string,
+	options: EvaluateOptions = {},
 ): Violation | null {
 	// Find the applicable rule for this file
 	const applicableRule = findApplicableRule(importInfo.sourceFile, rules);
@@ -39,6 +40,7 @@ export function evaluateImportBoundary(
 	const isExternal = importInfo.isExternal;
 
 	const moduleSpecifier = importInfo.moduleSpecifier;
+	const pathsMapping = options.pathsMapping;
 
 	if (mode === "allow-first") {
 		// Check deny rules first, then allow rules
@@ -49,6 +51,7 @@ export function evaluateImportBoundary(
 			importInfo.sourceFile,
 			rootDir,
 			isExternal,
+			pathsMapping,
 		);
 		if (denyMatch) {
 			return createViolation(importInfo, denyMatch, ruleFilePath, config.description);
@@ -63,6 +66,7 @@ export function evaluateImportBoundary(
 				importInfo.sourceFile,
 				rootDir,
 				isExternal,
+				pathsMapping,
 			);
 			if (!allowMatch) {
 				return createViolation(
@@ -85,6 +89,7 @@ export function evaluateImportBoundary(
 			importInfo.sourceFile,
 			rootDir,
 			isExternal,
+			pathsMapping,
 		);
 		if (allowMatch) {
 			return null;
@@ -97,6 +102,7 @@ export function evaluateImportBoundary(
 			importInfo.sourceFile,
 			rootDir,
 			isExternal,
+			pathsMapping,
 		);
 		if (denyMatch) {
 			return createViolation(importInfo, denyMatch, ruleFilePath, config.description);
@@ -159,17 +165,18 @@ function findMatchingRule(
 	sourceFile: string,
 	rootDir: string,
 	isExternal: boolean,
+	pathsMapping?: PathsMapping,
 ): ImportRule | null {
 	for (const rule of rules) {
 		// First, try matching against the resolved path
-		if (matchesPattern(pathToMatch, rule.from, sourceFile, rootDir, isExternal)) {
+		if (matchesPattern(pathToMatch, rule.from, sourceFile, rootDir, isExternal, pathsMapping)) {
 			return rule;
 		}
 		// Also try matching against the original module specifier
 		// This allows patterns like "@/api/**" or "@image-router/*" to work
 		if (
 			pathToMatch !== moduleSpecifier &&
-			matchesPattern(moduleSpecifier, rule.from, sourceFile, rootDir, isExternal)
+			matchesPattern(moduleSpecifier, rule.from, sourceFile, rootDir, isExternal, pathsMapping)
 		) {
 			return rule;
 		}
@@ -195,12 +202,40 @@ function getPackageName(moduleSpecifier: string): string {
 	return moduleSpecifier.split("/")[0];
 }
 
+/**
+ * Resolve a pattern using tsconfig paths mapping
+ * e.g., "@/api/**" with paths {"@/*": ["./src/*"]} -> "src/api/**"
+ */
+function resolvePatternWithPaths(pattern: string, pathsMapping?: PathsMapping): string[] {
+	if (!pathsMapping) {
+		return [pattern];
+	}
+
+	const resolvedPatterns: string[] = [pattern];
+
+	for (const [alias, targets] of Object.entries(pathsMapping)) {
+		// Convert alias pattern to regex (e.g., "@/*" -> "^@/(.*)$")
+		const aliasBase = alias.replace(/\*$/, "");
+		if (pattern.startsWith(aliasBase)) {
+			const remainder = pattern.slice(aliasBase.length);
+			for (const target of targets) {
+				// Convert target pattern (e.g., "./src/*" -> "src/")
+				const targetBase = target.replace(/^\.\//, "").replace(/\*$/, "");
+				resolvedPatterns.push(targetBase + remainder);
+			}
+		}
+	}
+
+	return resolvedPatterns;
+}
+
 function matchesPattern(
 	pathToMatch: string,
 	pattern: string,
 	sourceFile: string,
 	rootDir: string,
 	isExternal: boolean,
+	pathsMapping?: PathsMapping,
 ): boolean {
 	// Handle relative patterns (starting with ./)
 	if (pattern.startsWith("./") || pattern.startsWith("../")) {
@@ -210,33 +245,41 @@ function matchesPattern(
 		return minimatch(pathToMatch, resolvedPattern);
 	}
 
-	// Handle glob patterns
-	if (pattern.includes("*")) {
-		if (isExternal) {
-			// For external packages, also match against the package name
-			// e.g., pattern "lodash/*" should match "lodash/get"
-			const packageName = getPackageName(pathToMatch);
-			if (minimatch(packageName, pattern)) {
+	// Get all possible patterns (original + resolved via paths)
+	const patternsToTry = resolvePatternWithPaths(pattern, pathsMapping);
+
+	for (const currentPattern of patternsToTry) {
+		// Handle glob patterns
+		if (currentPattern.includes("*")) {
+			if (isExternal) {
+				// For external packages, also match against the package name
+				// e.g., pattern "lodash/*" should match "lodash/get"
+				const packageName = getPackageName(pathToMatch);
+				if (minimatch(packageName, currentPattern)) {
+					return true;
+				}
+			}
+			// For internal paths (and external full path match), use direct minimatch
+			if (minimatch(pathToMatch, currentPattern)) {
 				return true;
 			}
+			continue;
 		}
-		// For internal paths (and external full path match), use direct minimatch
-		return minimatch(pathToMatch, pattern);
-	}
 
-	// For non-glob patterns, extract package names and compare
-	const pathPackageName = getPackageName(pathToMatch);
-	const patternPackageName = getPackageName(pattern);
+		// For non-glob patterns, extract package names and compare
+		const pathPackageName = getPackageName(pathToMatch);
+		const patternPackageName = getPackageName(currentPattern);
 
-	// Exact package match or subpath of the same package
-	if (pathPackageName === patternPackageName) {
-		// If pattern is the full package name, allow any subpath
-		if (pattern === patternPackageName) {
-			return true;
-		}
-		// If pattern includes subpath, require exact match or subpath
-		if (pathToMatch === pattern || pathToMatch.startsWith(`${pattern}/`)) {
-			return true;
+		// Exact package match or subpath of the same package
+		if (pathPackageName === patternPackageName) {
+			// If pattern is the full package name, allow any subpath
+			if (currentPattern === patternPackageName) {
+				return true;
+			}
+			// If pattern includes subpath, require exact match or subpath
+			if (pathToMatch === currentPattern || pathToMatch.startsWith(`${currentPattern}/`)) {
+				return true;
+			}
 		}
 	}
 
