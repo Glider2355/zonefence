@@ -38,10 +38,13 @@ export function evaluateImportBoundary(
 
 	const isExternal = importInfo.isExternal;
 
+	const moduleSpecifier = importInfo.moduleSpecifier;
+
 	if (mode === "allow-first") {
 		// Check deny rules first, then allow rules
 		const denyMatch = findMatchingRule(
 			pathToMatch,
+			moduleSpecifier,
 			denyRules,
 			importInfo.sourceFile,
 			rootDir,
@@ -55,6 +58,7 @@ export function evaluateImportBoundary(
 		if (allowRules.length > 0) {
 			const allowMatch = findMatchingRule(
 				pathToMatch,
+				moduleSpecifier,
 				allowRules,
 				importInfo.sourceFile,
 				rootDir,
@@ -76,6 +80,7 @@ export function evaluateImportBoundary(
 		// deny-first: Check allow rules first, then deny rules
 		const allowMatch = findMatchingRule(
 			pathToMatch,
+			moduleSpecifier,
 			allowRules,
 			importInfo.sourceFile,
 			rootDir,
@@ -87,6 +92,7 @@ export function evaluateImportBoundary(
 
 		const denyMatch = findMatchingRule(
 			pathToMatch,
+			moduleSpecifier,
 			denyRules,
 			importInfo.sourceFile,
 			rootDir,
@@ -148,13 +154,23 @@ function getPathToMatch(importInfo: ImportInfo, rootDir: string): string {
 
 function findMatchingRule(
 	pathToMatch: string,
+	moduleSpecifier: string,
 	rules: ImportRule[],
 	sourceFile: string,
 	rootDir: string,
 	isExternal: boolean,
 ): ImportRule | null {
 	for (const rule of rules) {
+		// First, try matching against the resolved path
 		if (matchesPattern(pathToMatch, rule.from, sourceFile, rootDir, isExternal)) {
+			return rule;
+		}
+		// Also try matching against the original module specifier
+		// This allows patterns like "@/api/**" or "@image-router/*" to work
+		if (
+			pathToMatch !== moduleSpecifier &&
+			matchesPattern(moduleSpecifier, rule.from, sourceFile, rootDir, isExternal)
+		) {
 			return rule;
 		}
 	}
