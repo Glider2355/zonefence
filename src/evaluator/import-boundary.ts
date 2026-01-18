@@ -36,16 +36,30 @@ export function evaluateImportBoundary(
 	// Get the path to match against (resolved path or module specifier)
 	const pathToMatch = getPathToMatch(importInfo, rootDir);
 
+	const isExternal = importInfo.isExternal;
+
 	if (mode === "allow-first") {
 		// Check deny rules first, then allow rules
-		const denyMatch = findMatchingRule(pathToMatch, denyRules, importInfo.sourceFile, rootDir);
+		const denyMatch = findMatchingRule(
+			pathToMatch,
+			denyRules,
+			importInfo.sourceFile,
+			rootDir,
+			isExternal,
+		);
 		if (denyMatch) {
 			return createViolation(importInfo, denyMatch, ruleFilePath, config.description);
 		}
 
 		// If there are allow rules, import must match at least one
 		if (allowRules.length > 0) {
-			const allowMatch = findMatchingRule(pathToMatch, allowRules, importInfo.sourceFile, rootDir);
+			const allowMatch = findMatchingRule(
+				pathToMatch,
+				allowRules,
+				importInfo.sourceFile,
+				rootDir,
+				isExternal,
+			);
 			if (!allowMatch) {
 				return createViolation(
 					importInfo,
@@ -60,12 +74,24 @@ export function evaluateImportBoundary(
 		}
 	} else {
 		// deny-first: Check allow rules first, then deny rules
-		const allowMatch = findMatchingRule(pathToMatch, allowRules, importInfo.sourceFile, rootDir);
+		const allowMatch = findMatchingRule(
+			pathToMatch,
+			allowRules,
+			importInfo.sourceFile,
+			rootDir,
+			isExternal,
+		);
 		if (allowMatch) {
 			return null;
 		}
 
-		const denyMatch = findMatchingRule(pathToMatch, denyRules, importInfo.sourceFile, rootDir);
+		const denyMatch = findMatchingRule(
+			pathToMatch,
+			denyRules,
+			importInfo.sourceFile,
+			rootDir,
+			isExternal,
+		);
 		if (denyMatch) {
 			return createViolation(importInfo, denyMatch, ruleFilePath, config.description);
 		}
@@ -125,9 +151,10 @@ function findMatchingRule(
 	rules: ImportRule[],
 	sourceFile: string,
 	rootDir: string,
+	isExternal: boolean,
 ): ImportRule | null {
 	for (const rule of rules) {
-		if (matchesPattern(pathToMatch, rule.from, sourceFile, rootDir)) {
+		if (matchesPattern(pathToMatch, rule.from, sourceFile, rootDir, isExternal)) {
 			return rule;
 		}
 	}
@@ -157,25 +184,28 @@ function matchesPattern(
 	pattern: string,
 	sourceFile: string,
 	rootDir: string,
+	isExternal: boolean,
 ): boolean {
 	// Handle relative patterns (starting with ./)
 	if (pattern.startsWith("./") || pattern.startsWith("../")) {
 		// Resolve pattern relative to source file's directory
 		const sourceDir = path.dirname(sourceFile);
 		const resolvedPattern = path.relative(rootDir, path.resolve(sourceDir, pattern));
-		return minimatch(pathToMatch, resolvedPattern, { matchBase: true });
+		return minimatch(pathToMatch, resolvedPattern);
 	}
 
 	// Handle glob patterns
 	if (pattern.includes("*")) {
-		// For external packages with glob patterns, match against the package name
-		// and also allow subpaths of matching packages
-		const packageName = getPackageName(pathToMatch);
-		if (minimatch(packageName, pattern, { matchBase: true })) {
-			return true;
+		if (isExternal) {
+			// For external packages, also match against the package name
+			// e.g., pattern "lodash/*" should match "lodash/get"
+			const packageName = getPackageName(pathToMatch);
+			if (minimatch(packageName, pattern)) {
+				return true;
+			}
 		}
-		// Also try matching the full path for more specific patterns
-		return minimatch(pathToMatch, pattern, { matchBase: true });
+		// For internal paths (and external full path match), use direct minimatch
+		return minimatch(pathToMatch, pattern);
 	}
 
 	// For non-glob patterns, extract package names and compare

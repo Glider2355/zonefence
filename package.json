@@ -1,6 +1,6 @@
 {
 	"name": "zonefence",
-	"version": "0.0.4",
+	"version": "0.0.5",
 	"description": "Folder-based architecture guardrails for TypeScript projects",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -19,7 +19,8 @@
 	"scripts": {
 		"build": "tsup",
 		"dev": "tsup --watch",
-		"test": "vitest",
+		"test": "vitest run",
+		"test:watch": "vitest",
 		"lint": "biome check src",
 		"format": "biome format --write src",
 		"typecheck": "tsc --noEmit",
