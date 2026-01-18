@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { collectImports } from "../../core/import-collector.js";
 import { createProject } from "../../core/project.js";
@@ -11,14 +12,32 @@ export interface CheckOptions {
 	color?: boolean;
 }
 
+/**
+ * Find tsconfig.json by searching upward from the start directory
+ */
+function findTsConfig(startDir: string): string | undefined {
+	let dir = startDir;
+	while (dir !== path.dirname(dir)) {
+		const configPath = path.join(dir, "tsconfig.json");
+		if (fs.existsSync(configPath)) {
+			return configPath;
+		}
+		dir = path.dirname(dir);
+	}
+	return undefined;
+}
+
 export async function checkCommand(targetPath: string, options: CheckOptions): Promise<void> {
 	const absolutePath = path.resolve(targetPath);
 
 	console.log(`Checking import boundaries in: ${absolutePath}\n`);
 
 	try {
+		// Use provided config or auto-detect tsconfig.json
+		const tsConfigFilePath = options.config ?? findTsConfig(absolutePath);
+
 		const project = createProject({
-			tsConfigFilePath: options.config,
+			tsConfigFilePath,
 			rootDir: absolutePath,
 		});
 
