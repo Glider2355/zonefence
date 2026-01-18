@@ -1,0 +1,189 @@
+import { describe, expect, it } from "vitest";
+import type { ImportInfo } from "../core/types.js";
+import type { ResolvedRule } from "../rules/types.js";
+import { evaluateImportBoundary } from "./import-boundary.js";
+
+// Helper to create ImportInfo for external packages
+function createExternalImport(moduleSpecifier: string): ImportInfo {
+	return {
+		moduleSpecifier,
+		sourceFile: "/project/src/index.ts",
+		resolvedPath: null,
+		isExternal: true,
+		line: 1,
+		column: 1,
+	};
+}
+
+// Helper to create a rule
+function createRule(options: {
+	allow?: string[];
+	deny?: string[];
+	mode?: "allow-first" | "deny-first";
+}): ResolvedRule[] {
+	return [
+		{
+			directory: "/project/src",
+			ruleFilePath: "/project/src/zonefence.yaml",
+			excludePatterns: [],
+			config: {
+				version: 1,
+				imports: {
+					mode: options.mode ?? "allow-first",
+					allow: options.allow?.map((from) => ({ from })),
+					deny: options.deny?.map((from) => ({ from })),
+				},
+			},
+		},
+	];
+}
+
+describe("matchesPattern - external packages", () => {
+	const rootDir = "/project";
+
+	describe("exact match", () => {
+		it("should match exact package name", () => {
+			const importInfo = createExternalImport("lodash");
+			const rules = createRule({ allow: ["lodash"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull(); // null means allowed
+		});
+
+		it("should NOT match similar package names (lodash vs lodash-es)", () => {
+			const importInfo = createExternalImport("lodash-es");
+			const rules = createRule({ allow: ["lodash"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).not.toBeNull(); // should be a violation
+		});
+	});
+
+	describe("scoped packages", () => {
+		it("should match exact scoped package name", () => {
+			const importInfo = createExternalImport("@types/node");
+			const rules = createRule({ allow: ["@types/node"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull();
+		});
+
+		it("should match scoped package with subpath", () => {
+			const importInfo = createExternalImport("@types/node/fs");
+			const rules = createRule({ allow: ["@types/node"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull();
+		});
+	});
+
+	describe("glob patterns", () => {
+		it("should match with glob pattern @types/*", () => {
+			const importInfo = createExternalImport("@types/node");
+			const rules = createRule({ allow: ["@types/*"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull();
+		});
+
+		it("should match with glob pattern @babel/*", () => {
+			const importInfo = createExternalImport("@babel/core");
+			const rules = createRule({ allow: ["@babel/*"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull();
+		});
+
+		it("should match lodash* pattern for lodash-es", () => {
+			const importInfo = createExternalImport("lodash-es");
+			const rules = createRule({ allow: ["lodash*"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull();
+		});
+
+		it("should match react* pattern for react-dom", () => {
+			const importInfo = createExternalImport("react-dom");
+			const rules = createRule({ allow: ["react*"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull();
+		});
+
+		it("should NOT match @types/* for @babel/core", () => {
+			const importInfo = createExternalImport("@babel/core");
+			const rules = createRule({ allow: ["@types/*"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).not.toBeNull();
+		});
+	});
+
+	describe("deny rules", () => {
+		it("should deny exact package match", () => {
+			const importInfo = createExternalImport("lodash");
+			const rules = createRule({ deny: ["lodash"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).not.toBeNull();
+		});
+
+		it("should deny with glob pattern", () => {
+			const importInfo = createExternalImport("@internal/utils");
+			const rules = createRule({ deny: ["@internal/*"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).not.toBeNull();
+		});
+	});
+
+	describe("package subpaths", () => {
+		it("should match lodash/get with lodash pattern", () => {
+			const importInfo = createExternalImport("lodash/get");
+			const rules = createRule({ allow: ["lodash"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull();
+		});
+
+		it("should match @babel/core/lib/config with @babel/core pattern", () => {
+			const importInfo = createExternalImport("@babel/core/lib/config");
+			const rules = createRule({ allow: ["@babel/core"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull();
+		});
+
+		it("should match @babel/core with @babel/* pattern", () => {
+			const importInfo = createExternalImport("@babel/core");
+			const rules = createRule({ allow: ["@babel/*"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull();
+		});
+
+		it("should match @babel/core/lib with @babel/* pattern", () => {
+			const importInfo = createExternalImport("@babel/core/lib");
+			const rules = createRule({ allow: ["@babel/*"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull();
+		});
+
+		it("should match @babel/core/lib/config with @babel/** pattern", () => {
+			const importInfo = createExternalImport("@babel/core/lib/config");
+			const rules = createRule({ allow: ["@babel/**"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull();
+		});
+	});
+
+	describe("edge cases", () => {
+		it("should NOT match @babel/core with @babel pattern (no glob)", () => {
+			const importInfo = createExternalImport("@babel/core");
+			const rules = createRule({ allow: ["@babel"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			// @babel/core should NOT match @babel because @babel is a different scope
+			expect(result).not.toBeNull();
+		});
+
+		it("should match node:fs with node:* pattern", () => {
+			const importInfo = createExternalImport("node:fs");
+			const rules = createRule({ allow: ["node:*"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull();
+		});
+
+		it("should NOT match fs with node:* pattern", () => {
+			const importInfo = createExternalImport("fs");
+			const rules = createRule({ allow: ["node:*"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).not.toBeNull();
+		});
+	});
+});
