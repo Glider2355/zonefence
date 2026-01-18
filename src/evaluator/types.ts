@@ -27,3 +27,14 @@ export interface EvaluationResult {
 	/** Number of imports checked */
 	importsChecked: number;
 }
+
+/**
+ * Mapping from path aliases to their resolved paths
+ * e.g., { "@/*": ["./src/*"] }
+ */
+export type PathsMapping = Record<string, string[]>;
+
+export interface EvaluateOptions {
+	/** Path alias mapping from tsconfig.json */
+	pathsMapping?: PathsMapping;
+}
