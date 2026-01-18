@@ -134,6 +134,24 @@ function findMatchingRule(
 	return null;
 }
 
+/**
+ * Extract the package name from an import specifier.
+ * For scoped packages like @babel/core/lib, returns @babel/core
+ * For regular packages like lodash/get, returns lodash
+ */
+function getPackageName(moduleSpecifier: string): string {
+	if (moduleSpecifier.startsWith("@")) {
+		// Scoped package: @scope/package or @scope/package/subpath
+		const parts = moduleSpecifier.split("/");
+		if (parts.length >= 2) {
+			return `${parts[0]}/${parts[1]}`;
+		}
+		return moduleSpecifier;
+	}
+	// Regular package: package or package/subpath
+	return moduleSpecifier.split("/")[0];
+}
+
 function matchesPattern(
 	pathToMatch: string,
 	pattern: string,
@@ -150,12 +168,30 @@ function matchesPattern(
 
 	// Handle glob patterns
 	if (pattern.includes("*")) {
+		// For external packages with glob patterns, match against the package name
+		// and also allow subpaths of matching packages
+		const packageName = getPackageName(pathToMatch);
+		if (minimatch(packageName, pattern, { matchBase: true })) {
+			return true;
+		}
+		// Also try matching the full path for more specific patterns
 		return minimatch(pathToMatch, pattern, { matchBase: true });
 	}
 
-	// Exact match for external packages
-	if (pathToMatch === pattern || pathToMatch.startsWith(`${pattern}/`)) {
-		return true;
+	// For non-glob patterns, extract package names and compare
+	const pathPackageName = getPackageName(pathToMatch);
+	const patternPackageName = getPackageName(pattern);
+
+	// Exact package match or subpath of the same package
+	if (pathPackageName === patternPackageName) {
+		// If pattern is the full package name, allow any subpath
+		if (pattern === patternPackageName) {
+			return true;
+		}
+		// If pattern includes subpath, require exact match or subpath
+		if (pathToMatch === pattern || pathToMatch.startsWith(`${pattern}/`)) {
+			return true;
+		}
 	}
 
 	return false;
