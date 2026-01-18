@@ -90,31 +90,53 @@ imports:
 
 ## Path Matching
 
+zonefence matches imports against both the **resolved file path** and the **original module specifier**, so you can use whichever is more convenient.
+
 ### Resolved Paths
 
-Local imports are matched against the **resolved file path** relative to the project root, not the module specifier written in the code.
-
-For example, if your import is `@/api/helpers/errorHandler` and it resolves to `src/api/helpers/errorHandler.ts`, the rule pattern should use the actual path:
-
-```yaml
-imports:
-  deny:
-    # ❌ Path aliases are NOT supported in patterns
-    # - from: "@/api/**"
-
-    # ✅ Use actual file paths
-    - from: "src/api/**"
-```
-
-### External Packages
-
-Modules that cannot be resolved (external packages) are matched against the original module specifier.
+Local imports are matched against the resolved file path relative to the project root.
 
 ```yaml
 imports:
   allow:
-    - from: "src/shared/**"  # Matches resolved path
-    - from: "lodash"         # External packages match the specifier as-is
+    - from: "src/api/**"      # Matches resolved path
+    - from: "src/shared/**"
+```
+
+### Path Aliases
+
+You can also use path aliases directly in patterns. This is useful when your codebase uses TypeScript path aliases like `@/`.
+
+```yaml
+imports:
+  allow:
+    - from: "@/api/**"        # Matches module specifier @/api/helpers/errorHandler
+    - from: "@/shared/**"
+```
+
+### Workspace Packages
+
+For monorepo workspace packages, use the package name pattern:
+
+```yaml
+imports:
+  allow:
+    - from: "@myorg/shared"   # Exact package
+    - from: "@myorg/*"        # All packages in @myorg scope
+```
+
+### External Packages
+
+External npm packages are matched against the module specifier.
+
+```yaml
+imports:
+  allow:
+    - from: "lodash"          # Exact package
+    - from: "@types/*"        # All @types packages
+  deny:
+    - from: "axios"
+      message: "Use fetch instead"
 ```
 
 ## Rule Inheritance

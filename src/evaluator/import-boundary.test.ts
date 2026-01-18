@@ -15,6 +15,18 @@ function createExternalImport(moduleSpecifier: string): ImportInfo {
 	};
 }
 
+// Helper to create ImportInfo for internal imports (local files)
+function createInternalImport(moduleSpecifier: string, resolvedPath: string): ImportInfo {
+	return {
+		moduleSpecifier,
+		sourceFile: "/project/src/index.ts",
+		resolvedPath,
+		isExternal: false,
+		line: 1,
+		column: 1,
+	};
+}
+
 // Helper to create a rule
 function createRule(options: {
 	allow?: string[];
@@ -182,6 +194,92 @@ describe("matchesPattern - external packages", () => {
 		it("should NOT match fs with node:* pattern", () => {
 			const importInfo = createExternalImport("fs");
 			const rules = createRule({ allow: ["node:*"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).not.toBeNull();
+		});
+	});
+});
+
+describe("matchesPattern - internal paths", () => {
+	const rootDir = "/project";
+
+	describe("resolved path matching", () => {
+		it("should match internal path with glob pattern", () => {
+			// import from "@/api/helpers/errorHandler" resolves to api/helpers/errorHandler.ts
+			const importInfo = createInternalImport(
+				"@/api/helpers/errorHandler",
+				"/project/src/api/helpers/errorHandler.ts",
+			);
+			const rules = createRule({ allow: ["src/api/**"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull();
+		});
+
+		it("should match internal path with exact pattern", () => {
+			const importInfo = createInternalImport("./utils/helper", "/project/src/utils/helper.ts");
+			const rules = createRule({ allow: ["src/utils/**"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull();
+		});
+	});
+
+	describe("path alias matching", () => {
+		it("should match path alias pattern @/api/**", () => {
+			const importInfo = createInternalImport(
+				"@/api/helpers/errorHandler",
+				"/project/src/api/helpers/errorHandler.ts",
+			);
+			const rules = createRule({ allow: ["@/api/**"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull();
+		});
+
+		it("should match path alias pattern @/**", () => {
+			const importInfo = createInternalImport("@/utils/helper", "/project/src/utils/helper.ts");
+			const rules = createRule({ allow: ["@/**"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull();
+		});
+
+		it("should deny path alias with deny rule", () => {
+			const importInfo = createInternalImport(
+				"@/internal/secret",
+				"/project/src/internal/secret.ts",
+			);
+			const rules = createRule({ deny: ["@/internal/**"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).not.toBeNull();
+		});
+	});
+
+	describe("workspace package matching", () => {
+		it("should match workspace package pattern @image-router/*", () => {
+			// Workspace package resolves outside rootDir
+			const importInfo = createInternalImport(
+				"@image-router/shared",
+				"/project/../shared/index.ts",
+			);
+			const rules = createRule({ allow: ["@image-router/*"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull();
+		});
+
+		it("should match workspace package with subpath", () => {
+			const importInfo = createInternalImport(
+				"@image-router/shared/utils",
+				"/project/../shared/utils/index.ts",
+			);
+			const rules = createRule({ allow: ["@image-router/**"] });
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull();
+		});
+
+		it("should deny workspace package with deny rule", () => {
+			const importInfo = createInternalImport(
+				"@image-router/internal",
+				"/project/../internal/index.ts",
+			);
+			const rules = createRule({ deny: ["@image-router/internal"] });
 			const result = evaluateImportBoundary(importInfo, rules, rootDir);
 			expect(result).not.toBeNull();
 		});
