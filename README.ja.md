@@ -14,7 +14,7 @@ pnpm add -D zonefence
 
 ### ルールファイルの作成
 
-保護したいフォルダに `.zonefence.yaml` を配置します：
+保護したいフォルダに `zonefence.yaml` を配置します：
 
 ```yaml
 version: 1

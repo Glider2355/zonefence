@@ -4,7 +4,7 @@ import { parse as parseYaml } from "yaml";
 import { parseConfig } from "./schema.js";
 import type { RulesByDirectory, ZoneFenceConfig } from "./types.js";
 
-const RULE_FILE_NAME = ".zonefence.yaml";
+const RULE_FILE_NAME = "zonefence.yaml";
 
 export async function loadRulesForDirectory(rootDir: string): Promise<RulesByDirectory> {
 	const rules: RulesByDirectory = {};

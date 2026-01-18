@@ -14,7 +14,7 @@ npm install -D zonefence
 
 ### Create a rule file
 
-Create a `.zonefence.yaml` file in any folder you want to protect:
+Create a `zonefence.yaml` file in any folder you want to protect:
 
 ```yaml
 version: 1
