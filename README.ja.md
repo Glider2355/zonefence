@@ -2,6 +2,8 @@
 
 TypeScriptプロジェクト向けのフォルダ単位アーキテクチャ・ガードレール
 
+[English README](./README.md)
+
 ## インストール
 
 ```bash
@@ -24,7 +26,7 @@ description: "Domain層 - 外部依存を持たない純粋なビジネスロジ
 imports:
   allow:
     - from: "./**"           # 同フォルダ内のimportを許可
-    - from: "@/shared/**"    # 共有モジュールを許可
+    - from: "src/shared/**"  # 共有モジュールを許可
   deny:
     - from: "axios"
       message: "Domain層は外部HTTPライブラリに依存してはいけません"
@@ -54,7 +56,7 @@ scope:
 imports:
   allow:
     - from: "./**"           # 同フォルダ内
-    - from: "@/shared/**"    # 共有モジュール
+    - from: "src/shared/**"  # 共有モジュール
   deny:
     - from: "../infrastructure/**"
       message: "Domain層からInfrastructure層への依存は禁止"
@@ -90,7 +92,19 @@ imports:
 
 ### 解決済みパス
 
-相対パス（`../shared/utils`）とエイリアス（`@/shared/utils`）が同じファイルを指す場合、ts-morphで解決した絶対パスに対してマッチングを行います。これにより、書き方に関係なく同じルールが適用されます。
+ローカルインポートは、コードに書かれたモジュール指定子ではなく、プロジェクトルートからの**解決済みファイルパス**に対してマッチングを行います。
+
+例えば、インポートが `@/api/helpers/errorHandler` で、これが `src/api/helpers/errorHandler.ts` に解決される場合、ルールのパターンは実際のパスを使用する必要があります：
+
+```yaml
+imports:
+  deny:
+    # ❌ パスエイリアスはパターンでサポートされていません
+    # - from: "@/api/**"
+
+    # ✅ 実際のファイルパスを使用
+    - from: "src/api/**"
+```
 
 ### 外部パッケージ
 
@@ -99,8 +113,8 @@ imports:
 ```yaml
 imports:
   allow:
-    - from: "**/shared/**"  # 解決後パスにマッチ
-    - from: "lodash"        # 外部パッケージは指定子そのまま
+    - from: "src/shared/**"  # 解決後パスにマッチ
+    - from: "lodash"         # 外部パッケージは指定子そのまま
 ```
 
 ## ルールの継承
