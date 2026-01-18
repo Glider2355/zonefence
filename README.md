@@ -2,6 +2,8 @@
 
 Folder-based architecture guardrails for TypeScript projects.
 
+[日本語版 README](./README.ja.md)
+
 ## Installation
 
 ```bash
