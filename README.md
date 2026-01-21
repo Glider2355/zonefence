@@ -152,6 +152,86 @@ src/
 
 With `scope.apply: self`, the rule applies only to the current folder and is not inherited by child folders.
 
+## Directory Patterns (Colocation Support)
+
+For projects using colocation patterns (e.g., `containers/`, `presenters/` directories under each page), you can define `directoryPatterns` to apply rules automatically to matching directories without duplicating `zonefence.yaml` files.
+
+### Example Structure
+
+```
+src/
+├── pages/
+│   ├── zonefence.yaml      ← Define directoryPatterns here
+│   ├── home/
+│   │   ├── containers/     ← Pattern matches (within pages scope)
+│   │   └── presenters/     ← Pattern matches
+│   └── settings/
+│       ├── containers/     ← Pattern matches
+│       └── presenters/     ← Pattern matches
+└── api/
+    └── containers/         ← Does NOT match (outside pages scope)
+```
+
+### Configuration
+
+```yaml
+# src/pages/zonefence.yaml
+version: 1
+description: "Pages layer rules"
+
+directoryPatterns:
+  - pattern: "**/containers"
+    config:
+      description: "Container layer"
+      imports:
+        allow:
+          - from: "../presenters/**"
+          - from: "../hooks/**"
+        deny:
+          - from: "../containers/**"
+            message: "Containers should not import from sibling containers"
+
+  - pattern: "**/presenters"
+    config:
+      imports:
+        allow:
+          - from: "./**"
+          - from: "@/ui/**"
+        deny:
+          - from: "../containers/**"
+            message: "Presenters should not import from containers"
+
+scope:
+  exclude:
+    - "**/*.test.tsx"
+```
+
+### Pattern Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `pattern` | Glob pattern to match directories (relative to the zonefence.yaml location) | Required |
+| `config.description` | Description for matched directories | - |
+| `config.imports` | Import rules for matched directories | - |
+| `config.mergeStrategy` | `"merge"` (combine with other rules) or `"override"` (replace) | `"merge"` |
+| `priority` | Higher priority patterns are applied first (when multiple patterns match) | `0` |
+
+### Pattern Syntax
+
+| Pattern | Matches (from `pages/zonefence.yaml`) |
+|---------|---------------------------------------|
+| `**/containers` | `pages/home/containers`, `pages/settings/containers`, `pages/a/b/containers` |
+| `*/presenters` | `pages/home/presenters` (direct children only) |
+| `home/containers` | `pages/home/containers` (exact path) |
+
+### Priority Order
+
+When multiple rules apply to a directory:
+
+1. **Directory's own `zonefence.yaml`** (highest priority)
+2. **Pattern rules** (sorted by `priority` value, then by specificity)
+3. **Parent directory inheritance** (lowest priority)
+
 ## Error Output Example
 
 ```

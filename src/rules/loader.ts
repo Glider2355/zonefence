@@ -6,19 +6,32 @@ import type { RulesByDirectory, ZoneFenceConfig } from "./types.js";
 
 const RULE_FILE_NAME = "zonefence.yaml";
 
+export interface LoadRulesResult {
+	rules: RulesByDirectory;
+	allDirectories: string[];
+}
+
 export async function loadRulesForDirectory(rootDir: string): Promise<RulesByDirectory> {
+	const result = await loadRulesForDirectoryWithAllDirs(rootDir);
+	return result.rules;
+}
+
+export async function loadRulesForDirectoryWithAllDirs(rootDir: string): Promise<LoadRulesResult> {
 	const rules: RulesByDirectory = {};
+	const allDirectories: string[] = [];
 
-	await scanDirectory(rootDir, rootDir, rules);
+	await scanDirectory(rootDir, rootDir, rules, allDirectories);
 
-	return rules;
+	return { rules, allDirectories };
 }
 
 async function scanDirectory(
 	currentDir: string,
 	rootDir: string,
 	rules: RulesByDirectory,
+	allDirectories: string[],
 ): Promise<void> {
+	allDirectories.push(currentDir);
 	const ruleFilePath = path.join(currentDir, RULE_FILE_NAME);
 
 	if (fs.existsSync(ruleFilePath)) {
@@ -34,7 +47,7 @@ async function scanDirectory(
 	for (const entry of entries) {
 		if (entry.isDirectory() && !shouldSkipDirectory(entry.name)) {
 			const subDir = path.join(currentDir, entry.name);
-			await scanDirectory(subDir, rootDir, rules);
+			await scanDirectory(subDir, rootDir, rules, allDirectories);
 		}
 	}
 }
