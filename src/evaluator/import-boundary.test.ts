@@ -456,6 +456,42 @@ describe("allow-first mode with relative path patterns (issue #8)", () => {
 			const result = evaluateImportBoundary(importInfo, rules, rootDir);
 			expect(result).not.toBeNull(); // Should be denied
 		});
+
+		it("should match ../../_shared/** pattern (2 levels up)", () => {
+			const importInfo: ImportInfo = {
+				moduleSpecifier: "../../_shared/utils",
+				sourceFile: "/project/src/app/novel/[id]/_containers/NovelDetailContainer.tsx",
+				resolvedPath: "/project/src/app/novel/_shared/utils.tsx",
+				isExternal: false,
+				line: 20,
+				column: 0,
+			};
+			const rules = createRuleWithDirectory({
+				directory: "/project/src/app/novel/[id]/_containers",
+				mode: "allow-first",
+				allow: ["../../_shared/**"],
+			});
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull(); // Should be allowed
+		});
+
+		it("should match ../../[otherId]/_components/** pattern (2 levels up with dynamic route)", () => {
+			const importInfo: ImportInfo = {
+				moduleSpecifier: "../../[otherId]/_components/SharedComponent",
+				sourceFile: "/project/src/app/novel/[id]/_containers/NovelDetailContainer.tsx",
+				resolvedPath: "/project/src/app/novel/[otherId]/_components/SharedComponent.tsx",
+				isExternal: false,
+				line: 25,
+				column: 0,
+			};
+			const rules = createRuleWithDirectory({
+				directory: "/project/src/app/novel/[id]/_containers",
+				mode: "allow-first",
+				allow: ["../../[otherId]/_components/**"],
+			});
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result).toBeNull(); // Should be allowed
+		});
 	});
 
 	describe("same patterns in deny-first mode (for comparison)", () => {

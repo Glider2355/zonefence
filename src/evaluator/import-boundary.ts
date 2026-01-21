@@ -248,7 +248,9 @@ function matchesPattern(
 		if (!relativePathToMatch.startsWith("..")) {
 			relativePathToMatch = `./${relativePathToMatch}`;
 		}
-		return minimatch(relativePathToMatch, pattern);
+		// Escape brackets in pattern to handle Next.js dynamic routes like [id]
+		const escapedPattern = pattern.replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+		return minimatch(relativePathToMatch, escapedPattern);
 	}
 
 	// Get all possible patterns (original + resolved via paths)
