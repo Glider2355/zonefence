@@ -239,10 +239,16 @@ function matchesPattern(
 ): boolean {
 	// Handle relative patterns (starting with ./)
 	if (pattern.startsWith("./") || pattern.startsWith("../")) {
-		// Resolve pattern relative to source file's directory
+		// Convert pathToMatch to be relative to sourceDir instead of rootDir
+		// This avoids issues with special characters like [id] in Next.js dynamic routes
 		const sourceDir = path.dirname(sourceFile);
-		const resolvedPattern = path.relative(rootDir, path.resolve(sourceDir, pattern));
-		return minimatch(pathToMatch, resolvedPattern);
+		const absolutePathToMatch = path.resolve(rootDir, pathToMatch);
+		let relativePathToMatch = path.relative(sourceDir, absolutePathToMatch);
+		// Prepend ./ if the path doesn't start with .. to match patterns like "./**"
+		if (!relativePathToMatch.startsWith("..")) {
+			relativePathToMatch = `./${relativePathToMatch}`;
+		}
+		return minimatch(relativePathToMatch, pattern);
 	}
 
 	// Get all possible patterns (original + resolved via paths)
