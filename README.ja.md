@@ -152,6 +152,86 @@ src/
 
 `scope.apply: self` を指定すると、そのルールは自フォルダのみに適用され、子フォルダには継承されません。
 
+## ディレクトリパターン（コロケーション対応）
+
+ページごとに `containers/`、`presenters/` などのディレクトリを配置するコロケーションパターンを使用している場合、`directoryPatterns` を定義することで、`zonefence.yaml` を各ディレクトリに重複して配置せずにルールを自動適用できます。
+
+### ディレクトリ構造の例
+
+```
+src/
+├── pages/
+│   ├── zonefence.yaml      ← ここにdirectoryPatternsを定義
+│   ├── home/
+│   │   ├── containers/     ← パターンマッチ（pagesのスコープ内）
+│   │   └── presenters/     ← パターンマッチ
+│   └── settings/
+│       ├── containers/     ← パターンマッチ
+│       └── presenters/     ← パターンマッチ
+└── api/
+    └── containers/         ← マッチしない（pagesのスコープ外）
+```
+
+### 設定例
+
+```yaml
+# src/pages/zonefence.yaml
+version: 1
+description: "Pages層のルール"
+
+directoryPatterns:
+  - pattern: "**/containers"
+    config:
+      description: "Container層"
+      imports:
+        allow:
+          - from: "../presenters/**"
+          - from: "../hooks/**"
+        deny:
+          - from: "../containers/**"
+            message: "Containerは兄弟Containerからimportしてはいけません"
+
+  - pattern: "**/presenters"
+    config:
+      imports:
+        allow:
+          - from: "./**"
+          - from: "@/ui/**"
+        deny:
+          - from: "../containers/**"
+            message: "PresenterはContainerからimportしてはいけません"
+
+scope:
+  exclude:
+    - "**/*.test.tsx"
+```
+
+### パターンオプション
+
+| オプション | 説明 | デフォルト |
+|-----------|------|-----------|
+| `pattern` | マッチするディレクトリのglobパターン（zonefence.yamlの位置からの相対パス） | 必須 |
+| `config.description` | マッチしたディレクトリの説明 | - |
+| `config.imports` | マッチしたディレクトリのimportルール | - |
+| `config.mergeStrategy` | `"merge"`（他のルールと結合）または `"override"`（置換） | `"merge"` |
+| `priority` | 複数パターンがマッチした場合、優先度が高い方が先に適用される | `0` |
+
+### パターン書式
+
+| パターン | マッチ例（`pages/zonefence.yaml`から） |
+|---------|---------------------------------------|
+| `**/containers` | `pages/home/containers`, `pages/settings/containers`, `pages/a/b/containers` |
+| `*/presenters` | `pages/home/presenters`（直下の子のみ） |
+| `home/containers` | `pages/home/containers`（完全一致） |
+
+### 優先順位
+
+複数のルールがディレクトリに適用される場合：
+
+1. **ディレクトリ固有の `zonefence.yaml`**（最優先）
+2. **パターンルール**（`priority`値順、次に具体性順）
+3. **親ディレクトリからの継承**（最低優先）
+
 ## エラー出力例
 
 ```

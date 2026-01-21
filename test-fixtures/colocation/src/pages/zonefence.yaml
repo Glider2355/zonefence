@@ -1,0 +1,29 @@
+version: 1
+description: "Pages layer rules with colocation patterns"
+
+directoryPatterns:
+  - pattern: "**/containers"
+    config:
+      description: "Container layer"
+      imports:
+        allow:
+          - from: "../presenters/**"
+          - from: "../hooks/**"
+        deny:
+          - from: "../containers/**"
+            message: "Containers should not import from sibling containers"
+
+  - pattern: "**/presenters"
+    config:
+      description: "Presenter layer"
+      imports:
+        allow:
+          - from: "./**"
+          - from: "@/ui/**"
+        deny:
+          - from: "../containers/**"
+            message: "Presenters should not import from containers"
+
+scope:
+  exclude:
+    - "**/*.test.tsx"
