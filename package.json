@@ -1,6 +1,6 @@
 {
 	"name": "zonefence",
-	"version": "0.0.9",
+	"version": "0.0.10",
 	"description": "Folder-based architecture guardrails for TypeScript projects",
 	"type": "module",
 	"main": "./dist/index.js",

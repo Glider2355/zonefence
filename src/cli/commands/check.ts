@@ -6,8 +6,8 @@ import { createProject } from "../../core/project.js";
 import { evaluate } from "../../evaluator/index.js";
 import type { PathsMapping } from "../../evaluator/types.js";
 import { reportToConsole } from "../../reporter/console.js";
-import { loadRulesForDirectory } from "../../rules/loader.js";
-import { resolveRules } from "../../rules/resolver.js";
+import { loadRulesForDirectoryWithAllDirs } from "../../rules/loader.js";
+import { resolveRulesWithPatterns } from "../../rules/resolver.js";
 
 export interface CheckOptions {
 	config?: string;
@@ -84,8 +84,8 @@ export async function checkCommand(targetPath: string, options: CheckOptions): P
 			process.exit(0);
 		}
 
-		const rulesByDir = await loadRulesForDirectory(absolutePath);
-		const resolvedRules = resolveRules(rulesByDir);
+		const { rules, allDirectories } = await loadRulesForDirectoryWithAllDirs(absolutePath);
+		const resolvedRules = resolveRulesWithPatterns(rules, allDirectories);
 
 		// Get paths mapping from tsconfig for pattern resolution
 		const pathsMapping = getPathsMapping(project, absolutePath, tsConfigFilePath);
