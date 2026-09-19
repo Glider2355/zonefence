@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
-import { parseConfig } from "./schema.js";
+import type { z } from "zod";
+import { validateConfig } from "./schema.js";
 import type { RulesByDirectory, ZoneFenceConfig } from "./types.js";
 
 const RULE_FILE_NAME = "zonefence.yaml";
@@ -35,7 +36,7 @@ async function scanDirectory(
 	const ruleFilePath = path.join(currentDir, RULE_FILE_NAME);
 
 	if (fs.existsSync(ruleFilePath)) {
-		const config = await loadRuleFile(ruleFilePath);
+		const config = parseRuleFile(ruleFilePath);
 		rules[currentDir] = {
 			config,
 			ruleFilePath,
@@ -52,10 +53,35 @@ async function scanDirectory(
 	}
 }
 
-async function loadRuleFile(filePath: string): Promise<ZoneFenceConfig> {
+/**
+ * Turn a ZodError into a message that names the offending file and keys, so that
+ * a typo like `reason:`/`mesage:` is actionable instead of a raw JSON dump.
+ */
+function formatConfigError(filePath: string, error: z.ZodError): string {
+	const details = error.issues
+		.map((issue) => {
+			const location = issue.path.length > 0 ? issue.path.join(".") : "(root)";
+			if (issue.code === "unrecognized_keys") {
+				const keys = issue.keys.map((key) => `"${key}"`).join(", ");
+				return `  ${location}: unknown key ${keys}`;
+			}
+			return `  ${location}: ${issue.message}`;
+		})
+		.join("\n");
+
+	return `Invalid configuration in ${filePath}\n${details}`;
+}
+
+function parseRuleFile(filePath: string): ZoneFenceConfig {
 	const content = fs.readFileSync(filePath, "utf-8");
 	const parsed = parseYaml(content);
-	return parseConfig(parsed);
+	const result = validateConfig(parsed);
+
+	if (!result.success) {
+		throw new Error(formatConfigError(filePath, result.error));
+	}
+
+	return result.data;
 }
 
 function shouldSkipDirectory(name: string): boolean {
@@ -64,7 +90,5 @@ function shouldSkipDirectory(name: string): boolean {
 }
 
 export function loadRules(filePath: string): ZoneFenceConfig {
-	const content = fs.readFileSync(filePath, "utf-8");
-	const parsed = parseYaml(content);
-	return parseConfig(parsed);
+	return parseRuleFile(filePath);
 }

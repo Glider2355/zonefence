@@ -1,4 +1,6 @@
-import type { ImportDeclaration, Project, SourceFile } from "ts-morph";
+import path from "node:path";
+import { type CallExpression, type ImportDeclaration, type Project, SyntaxKind } from "ts-morph";
+import type { SourceFile } from "ts-morph";
 import type { ImportInfo } from "./types.js";
 
 export function collectImports(project: Project, rootDir: string): ImportInfo[] {
@@ -21,7 +23,7 @@ function collectImportsFromFile(sourceFile: SourceFile, rootDir: string): Import
 		imports.push(importInfo);
 	}
 
-	// Also collect dynamic imports and re-exports
+	// Re-exports (`export ... from "..."`)
 	for (const exportDecl of sourceFile.getExportDeclarations()) {
 		const moduleSpecifier = exportDecl.getModuleSpecifier();
 		if (moduleSpecifier) {
@@ -41,7 +43,98 @@ function collectImportsFromFile(sourceFile: SourceFile, rootDir: string): Import
 		}
 	}
 
+	// Dynamic `import("...")` and `require("...")` calls, which otherwise bypass
+	// the fence entirely.
+	imports.push(...collectCallExpressionImports(sourceFile, filePath));
+
 	return imports;
+}
+
+/**
+ * Collect `import("...")` and `require("...")` calls with a string literal argument.
+ *
+ * Non-literal arguments (template literals, variables) are skipped: there is no
+ * specifier to match a pattern against.
+ */
+function collectCallExpressionImports(sourceFile: SourceFile, filePath: string): ImportInfo[] {
+	const imports: ImportInfo[] = [];
+
+	for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+		if (!isModuleLoadingCall(call)) {
+			continue;
+		}
+
+		const [firstArgument] = call.getArguments();
+		if (!firstArgument?.isKind(SyntaxKind.StringLiteral)) {
+			continue;
+		}
+
+		const moduleSpecifier = firstArgument.getLiteralValue();
+		const resolvedPath = resolveSpecifierInProject(sourceFile, filePath, moduleSpecifier);
+
+		imports.push({
+			sourceFile: filePath,
+			moduleSpecifier,
+			resolvedPath,
+			isExternal: isExternalImport(moduleSpecifier, resolvedPath),
+			line: call.getStartLineNumber(),
+			column: call.getStart() - call.getStartLinePos(),
+		});
+	}
+
+	return imports;
+}
+
+function isModuleLoadingCall(call: CallExpression): boolean {
+	const expression = call.getExpression();
+
+	// Dynamic import: the callee is the `import` keyword itself
+	if (expression.isKind(SyntaxKind.ImportKeyword)) {
+		return true;
+	}
+
+	// CommonJS require
+	return expression.isKind(SyntaxKind.Identifier) && expression.getText() === "require";
+}
+
+/**
+ * Resolve a relative specifier against the files already loaded into the project.
+ *
+ * ts-morph offers no `getModuleSpecifierSourceFile` for call expressions, so this
+ * walks the usual TypeScript candidates. Alias and bare specifiers are left
+ * unresolved; the evaluator matches those against the specifier itself (and the
+ * tsconfig paths mapping).
+ */
+function resolveSpecifierInProject(
+	sourceFile: SourceFile,
+	filePath: string,
+	moduleSpecifier: string,
+): string | null {
+	if (!moduleSpecifier.startsWith(".")) {
+		return null;
+	}
+
+	const project = sourceFile.getProject();
+	const base = path.resolve(path.dirname(filePath), moduleSpecifier);
+
+	// A ".js" specifier in a TS project usually points at the ".ts" source
+	const withoutJsExtension = base.replace(/\.(js|jsx|mjs|cjs)$/, "");
+	const extensions = ["", ".ts", ".tsx", ".d.ts"];
+
+	const candidates = [
+		...extensions.map((extension) => `${base}${extension}`),
+		...extensions.map((extension) => `${withoutJsExtension}${extension}`),
+		...["index.ts", "index.tsx"].map((indexFile) => path.join(base, indexFile)),
+	];
+
+	for (const candidate of candidates) {
+		const resolved = project.getSourceFile(candidate);
+		if (resolved) {
+			return resolved.getFilePath();
+		}
+	}
+
+	return null;
 }
 
 function parseImportDeclaration(

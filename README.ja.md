@@ -63,6 +63,10 @@ imports:
   mode: allow-first  # デフォルト
 ```
 
+未知のキーはエラーになります。`mesage:` のようなタイプミスは黙って無視されるのではなく、
+該当ファイルとキー名を示して検証エラーになります。`reason` は `message` のエイリアスとして
+受け付けます。
+
 ### 設定オプション
 
 | オプション | 説明 | デフォルト |
@@ -74,6 +78,8 @@ imports:
 | `imports.allow` | 許可するimportパターンのリスト | `[]` |
 | `imports.deny` | 禁止するimportパターンのリスト | `[]` |
 | `imports.mode` | 評価モード（`allow-first`: 許可リスト優先、`deny-first`: 禁止リスト優先） | `allow-first` |
+| `imports.allow[].from` / `imports.deny[].from` | マッチさせる import パターン | 必須 |
+| `imports.allow[].message` / `imports.deny[].message` | 違反時に表示するメッセージ（エイリアス: `reason`） | - |
 
 ### 評価モード
 
@@ -101,6 +107,35 @@ imports:
   allow:
     - from: "src/api/**"      # 解決後パスにマッチ
     - from: "src/shared/**"
+```
+
+### 相対パターン
+
+`./` または `../` で始まるパターンは、**ルールを持つディレクトリ**（`directoryPatterns` の
+場合はパターンがマッチしたディレクトリ）を基準に解決されます。import 元ファイルのディレクトリ
+基準ではないため、1つのルールがそのディレクトリ配下のネストしたファイルにも一様に適用されます。
+
+```
+src/packages/novel/
+├── core/
+└── use-case/
+    ├── zonefence.yaml      # allow: ["./**", "../core/**"]
+    └── novel/
+        └── NovelUseCase.ts # ../core/** から import できる
+```
+
+glob のメタ文字を含むディレクトリ名はリテラルとして扱われるため、Next.js の dynamic route
+（`[id]`）や route group（`(group)`）も期待通りマッチします。
+
+```yaml
+# src/zonefence.yaml
+directoryPatterns:
+  - pattern: "**/_containers"
+    config:
+      imports:
+        allow:
+          - from: "../_components/**"   # app/novel/[id]/_components/** にマッチ
+          - from: "./**"
 ```
 
 ### パスエイリアス
@@ -138,6 +173,20 @@ imports:
     - from: "axios"
       message: "fetchを使用してください"
 ```
+
+### 動的 import
+
+静的な `import` / `export ... from` に加えて、動的 `import("...")` と `require("...")` も
+検査対象です。
+
+```ts
+const { getCloudflareContext } = await import("@opennextjs/cloudflare"); // 検査される
+const Heavy = dynamic(() => import("@/app/foo/_components/Heavy"));      // 検査される
+const fs = require("node:fs");                                          // 検査される
+```
+
+引数が文字列リテラルでない呼び出し（テンプレートリテラルや変数）は、マッチ対象となる指定子が
+存在しないためスキップされます。
 
 ## ルールの継承
 
@@ -253,6 +302,44 @@ npx zonefence check [path] [options]
 |-----------|------|
 | `-c, --config <path>` | tsconfig.jsonのパス |
 | `--no-color` | カラー出力を無効化 |
+| `--reporter <name>` | 出力形式: `console`（デフォルト）/ `json` / `github` |
+
+違反が1件以上あれば終了コードは `1`、なければ `0` です。
+
+### レポーター
+
+`--reporter json` は構造化されたレポートを stdout に出力します。パスは実行ディレクトリからの
+相対パスです。
+
+```json
+{
+  "violations": [
+    {
+      "file": "src/core/Novel.ts",
+      "line": 3,
+      "column": 0,
+      "moduleSpecifier": "hono",
+      "message": "Core層はHTTPフレームワークに依存できません",
+      "rule": "import-boundary",
+      "ruleFilePath": "src/core/zonefence.yaml",
+      "designIntent": "Core層 - 純粋なビジネスロジック"
+    }
+  ],
+  "summary": { "errorCount": 1, "filesChecked": 4, "importsChecked": 12 }
+}
+```
+
+`--reporter github` は GitHub Actions のエラーアノテーションを出力するため、違反が PR の
+該当行に表示されます。
+
+```
+::error file=src/core/Novel.ts,line=3,col=0,title=zonefence(import-boundary)::Core層はHTTPフレームワークに依存できません
+```
+
+```yaml
+# .github/workflows/zonefence.yml
+- run: npx zonefence check ./src --reporter github
+```
 
 ## 開発
 
