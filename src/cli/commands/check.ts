@@ -6,12 +6,48 @@ import { createProject } from "../../core/project.js";
 import { evaluate } from "../../evaluator/index.js";
 import type { PathsMapping } from "../../evaluator/types.js";
 import { reportToConsole } from "../../reporter/console.js";
+import { reportToGithub } from "../../reporter/github.js";
+import { reportToJson } from "../../reporter/json.js";
+import {
+	REPORTER_NAMES,
+	type ReporterName,
+	isMachineReadable,
+	isReporterName,
+} from "../../reporter/types.js";
 import { loadRulesForDirectoryWithAllDirs } from "../../rules/loader.js";
 import { resolveRulesWithPatterns } from "../../rules/resolver.js";
 
 export interface CheckOptions {
 	config?: string;
 	color?: boolean;
+	reporter?: string;
+}
+
+function resolveReporter(value: string | undefined): ReporterName {
+	const reporter = value ?? "console";
+
+	if (!isReporterName(reporter)) {
+		throw new Error(
+			`Unknown reporter "${reporter}". Expected one of: ${REPORTER_NAMES.join(", ")}`,
+		);
+	}
+
+	return reporter;
+}
+
+function report(
+	reporter: ReporterName,
+	results: Parameters<typeof reportToConsole>[0],
+	useColor: boolean,
+): number {
+	switch (reporter) {
+		case "json":
+			return reportToJson(results);
+		case "github":
+			return reportToGithub(results);
+		default:
+			return reportToConsole(results, { color: useColor });
+	}
 }
 
 /**
@@ -66,9 +102,15 @@ function getPathsMapping(
 export async function checkCommand(targetPath: string, options: CheckOptions): Promise<void> {
 	const absolutePath = path.resolve(targetPath);
 
-	console.log(`Checking import boundaries in: ${absolutePath}\n`);
-
 	try {
+		const reporter = resolveReporter(options.reporter);
+		// Machine-readable reporters must emit nothing but their own output
+		const quiet = isMachineReadable(reporter);
+
+		if (!quiet) {
+			console.log(`Checking import boundaries in: ${absolutePath}\n`);
+		}
+
 		// Use provided config or auto-detect tsconfig.json
 		const tsConfigFilePath = options.config ?? findTsConfig(absolutePath);
 
@@ -80,7 +122,11 @@ export async function checkCommand(targetPath: string, options: CheckOptions): P
 		const imports = collectImports(project, absolutePath);
 
 		if (imports.length === 0) {
-			console.log("No imports found to check.");
+			if (quiet) {
+				report(reporter, { violations: [], filesChecked: 0, importsChecked: 0 }, false);
+			} else {
+				console.log("No imports found to check.");
+			}
 			process.exit(0);
 		}
 
@@ -92,9 +138,7 @@ export async function checkCommand(targetPath: string, options: CheckOptions): P
 
 		const results = evaluate(imports, resolvedRules, absolutePath, { pathsMapping });
 
-		const exitCode = reportToConsole(results, {
-			color: options.color !== false,
-		});
+		const exitCode = report(reporter, results, options.color !== false);
 
 		process.exit(exitCode);
 	} catch (error) {

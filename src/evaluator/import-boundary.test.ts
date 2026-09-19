@@ -371,3 +371,312 @@ describe("matchesPattern - path alias resolution with pathsMapping", () => {
 		});
 	});
 });
+
+// Regression tests for relative pattern resolution.
+// See https://github.com/Glider2355/zonefence/issues/11 (glob metacharacters),
+// https://github.com/Glider2355/zonefence/issues/8 (allow-first symptom) and
+// https://github.com/Glider2355/zonefence/issues/12 (pattern base directory).
+describe("relative patterns", () => {
+	const rootDir = "/project/src";
+
+	function createRuleAt(
+		directory: string,
+		imports: {
+			mode?: "allow-first" | "deny-first";
+			allow?: { from: string; message?: string }[];
+			deny?: { from: string; message?: string }[];
+		},
+	): ResolvedRule[] {
+		return [
+			{
+				directory,
+				ruleFilePath: `${directory}/zonefence.yaml`,
+				excludePatterns: [],
+				config: {
+					version: 1,
+					imports: { mode: imports.mode ?? "allow-first", ...imports },
+				},
+			},
+		];
+	}
+
+	function createImport(
+		sourceFile: string,
+		moduleSpecifier: string,
+		resolvedPath: string | null,
+	): ImportInfo {
+		return { sourceFile, moduleSpecifier, resolvedPath, isExternal: false, line: 1, column: 0 };
+	}
+
+	describe("directory names containing glob metacharacters", () => {
+		it("should match through a Next.js dynamic route segment", () => {
+			const importInfo = createImport(
+				`${rootDir}/app/novel/[id]/_containers/NovelDetailContainer.tsx`,
+				"../_components/ChapterSection",
+				`${rootDir}/app/novel/[id]/_components/ChapterSection.tsx`,
+			);
+			const rules = createRuleAt(`${rootDir}/app/novel/[id]/_containers`, {
+				allow: [{ from: "../_components/**" }, { from: "./**" }],
+			});
+			expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+		});
+
+		it("should match ./** through a Next.js dynamic route segment", () => {
+			const importInfo = createImport(
+				`${rootDir}/app/novel/[id]/_containers/NovelDetailContainer.tsx`,
+				"./NovelLikeContainer",
+				`${rootDir}/app/novel/[id]/_containers/NovelLikeContainer.tsx`,
+			);
+			const rules = createRuleAt(`${rootDir}/app/novel/[id]/_containers`, {
+				allow: [{ from: "../_components/**" }, { from: "./**" }],
+			});
+			expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+		});
+
+		it("should match through a Next.js route group segment", () => {
+			const importInfo = createImport(
+				`${rootDir}/app/(marketing)/_containers/HeroContainer.tsx`,
+				"../_components/Hero",
+				`${rootDir}/app/(marketing)/_components/Hero.tsx`,
+			);
+			const rules = createRuleAt(`${rootDir}/app/(marketing)/_containers`, {
+				allow: [{ from: "../_components/**" }],
+			});
+			expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+		});
+
+		it("should still deny sibling imports across a dynamic route segment", () => {
+			const importInfo = createImport(
+				`${rootDir}/app/novel/[id]/_containers/NovelDetailContainer.tsx`,
+				"../../assets/_containers/AssetContainer",
+				`${rootDir}/app/novel/assets/_containers/AssetContainer.tsx`,
+			);
+			const rules = createRuleAt(`${rootDir}/app/novel/[id]/_containers`, {
+				allow: [{ from: "./**" }],
+				deny: [{ from: "../../**/_containers/**", message: "No sibling containers" }],
+			});
+			const result = evaluateImportBoundary(importInfo, rules, rootDir);
+			expect(result?.message).toBe("No sibling containers");
+		});
+	});
+
+	describe("user-authored glob syntax is preserved", () => {
+		it("should still honor a character class in the pattern", () => {
+			const importInfo = createImport(
+				`${rootDir}/app/a/Component.tsx`,
+				"./v2/Thing",
+				`${rootDir}/app/a/v2/Thing.ts`,
+			);
+			const rules = createRuleAt(`${rootDir}/app/a`, { allow: [{ from: "./v[0-9]/**" }] });
+			expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+		});
+
+		it("should still honor ** after a resolved dynamic route segment", () => {
+			const importInfo = createImport(
+				`${rootDir}/app/novel/[id]/_containers/Container.tsx`,
+				"../../../shared/_lib/format",
+				`${rootDir}/app/shared/_lib/format.ts`,
+			);
+			const rules = createRuleAt(`${rootDir}/app/novel/[id]/_containers`, {
+				allow: [{ from: "../../../**/_lib/**" }],
+			});
+			expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+		});
+
+		it("should match a route group written into the pattern", () => {
+			const importInfo = createImport(
+				`${rootDir}/app/novel/_containers/Container.tsx`,
+				"../../(marketing)/_components/Hero",
+				`${rootDir}/app/(marketing)/_components/Hero.tsx`,
+			);
+			const rules = createRuleAt(`${rootDir}/app/novel/_containers`, {
+				allow: [{ from: "../../(marketing)/_components/**" }],
+			});
+			expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+		});
+	});
+
+	describe("pattern base directory", () => {
+		it("should resolve relative patterns against the rule directory, not the importing file", () => {
+			const importInfo = createImport(
+				`${rootDir}/packages/novel/use-case/novel/NovelUseCase.ts`,
+				"@/packages/novel/core/Novel",
+				`${rootDir}/packages/novel/core/Novel.ts`,
+			);
+			const rules = createRuleAt(`${rootDir}/packages/novel/use-case`, {
+				allow: [{ from: "./**" }, { from: "../core/**" }],
+			});
+			expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+		});
+
+		it("should still deny a sibling context outside the rule directory", () => {
+			const importInfo = createImport(
+				`${rootDir}/packages/novel/use-case/novel/NovelUseCase.ts`,
+				"@/packages/other/core/Other",
+				`${rootDir}/packages/other/core/Other.ts`,
+			);
+			const rules = createRuleAt(`${rootDir}/packages/novel/use-case`, {
+				allow: [{ from: "./**" }, { from: "../core/**" }],
+			});
+			expect(evaluateImportBoundary(importInfo, rules, rootDir)).not.toBeNull();
+		});
+
+		it("should match unresolved relative imports such as non-TS assets", () => {
+			const importInfo = createImport(`${rootDir}/app/page.tsx`, "./assets/player.js.txt", null);
+			const rules = createRuleAt(`${rootDir}/app`, { allow: [{ from: "./assets/**" }] });
+			expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+		});
+	});
+});
+
+// Cases carried over from PR #9, which proposed a different fix for issue #8.
+describe("allow-first mode with relative path patterns (issue #8)", () => {
+	const rootDir = "/project/src";
+
+	function createRuleWithDirectory(options: {
+		directory: string;
+		allow?: string[];
+		deny?: string[];
+		mode?: "allow-first" | "deny-first";
+	}): ResolvedRule[] {
+		return [
+			{
+				directory: options.directory,
+				ruleFilePath: `${options.directory}/zonefence.yaml`,
+				excludePatterns: [],
+				config: {
+					version: 1,
+					imports: {
+						mode: options.mode ?? "allow-first",
+						allow: options.allow?.map((from) => ({ from })),
+						deny: options.deny?.map((from) => ({ from })),
+					},
+				},
+			},
+		];
+	}
+
+	describe("relative path patterns in allow-first mode", () => {
+		it("should match ../_components/** pattern with import from ../_components/ChapterSection", () => {
+			const importInfo: ImportInfo = {
+				moduleSpecifier: "../_components/ChapterSection",
+				sourceFile: "/project/src/app/novel/[id]/_containers/NovelDetailContainer.tsx",
+				resolvedPath: "/project/src/app/novel/[id]/_components/ChapterSection.tsx",
+				isExternal: false,
+				line: 10,
+				column: 0,
+			};
+			const rules = createRuleWithDirectory({
+				directory: "/project/src/app/novel/[id]/_containers",
+				mode: "allow-first",
+				allow: ["../_components/**"],
+			});
+			expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+		});
+
+		it("should match ./** pattern with import from ./NovelLikeContainer", () => {
+			const importInfo: ImportInfo = {
+				moduleSpecifier: "./NovelLikeContainer",
+				sourceFile: "/project/src/app/novel/[id]/_containers/NovelDetailContainer.tsx",
+				resolvedPath: "/project/src/app/novel/[id]/_containers/NovelLikeContainer.tsx",
+				isExternal: false,
+				line: 13,
+				column: 0,
+			};
+			const rules = createRuleWithDirectory({
+				directory: "/project/src/app/novel/[id]/_containers",
+				mode: "allow-first",
+				allow: ["./**"],
+			});
+			expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+		});
+
+		it("should deny import not in allow list", () => {
+			const importInfo: ImportInfo = {
+				moduleSpecifier: "../../_containers/OtherContainer",
+				sourceFile: "/project/src/app/novel/[id]/_containers/NovelDetailContainer.tsx",
+				resolvedPath: "/project/src/app/novel/_containers/OtherContainer.tsx",
+				isExternal: false,
+				line: 15,
+				column: 0,
+			};
+			const rules = createRuleWithDirectory({
+				directory: "/project/src/app/novel/[id]/_containers",
+				mode: "allow-first",
+				allow: ["../_components/**", "./**"],
+			});
+			expect(evaluateImportBoundary(importInfo, rules, rootDir)).not.toBeNull();
+		});
+
+		it("should match ../../_shared/** pattern (2 levels up)", () => {
+			const importInfo: ImportInfo = {
+				moduleSpecifier: "../../_shared/utils",
+				sourceFile: "/project/src/app/novel/[id]/_containers/NovelDetailContainer.tsx",
+				resolvedPath: "/project/src/app/novel/_shared/utils.tsx",
+				isExternal: false,
+				line: 20,
+				column: 0,
+			};
+			const rules = createRuleWithDirectory({
+				directory: "/project/src/app/novel/[id]/_containers",
+				mode: "allow-first",
+				allow: ["../../_shared/**"],
+			});
+			expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+		});
+
+		it("should match ../../[otherId]/_components/** pattern (2 levels up with dynamic route)", () => {
+			const importInfo: ImportInfo = {
+				moduleSpecifier: "../../[otherId]/_components/SharedComponent",
+				sourceFile: "/project/src/app/novel/[id]/_containers/NovelDetailContainer.tsx",
+				resolvedPath: "/project/src/app/novel/[otherId]/_components/SharedComponent.tsx",
+				isExternal: false,
+				line: 25,
+				column: 0,
+			};
+			const rules = createRuleWithDirectory({
+				directory: "/project/src/app/novel/[id]/_containers",
+				mode: "allow-first",
+				allow: ["../../[otherId]/_components/**"],
+			});
+			expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+		});
+
+		it("should match a catch-all dynamic route segment written into the pattern", () => {
+			const importInfo: ImportInfo = {
+				moduleSpecifier: "../../[...slug]/_components/SharedComponent",
+				sourceFile: "/project/src/app/novel/[id]/_containers/NovelDetailContainer.tsx",
+				resolvedPath: "/project/src/app/novel/[...slug]/_components/SharedComponent.tsx",
+				isExternal: false,
+				line: 26,
+				column: 0,
+			};
+			const rules = createRuleWithDirectory({
+				directory: "/project/src/app/novel/[id]/_containers",
+				mode: "allow-first",
+				allow: ["../../[...slug]/_components/**"],
+			});
+			expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+		});
+	});
+
+	describe("same patterns in deny-first mode (for comparison)", () => {
+		it("should allow ../_components/** pattern in deny-first mode", () => {
+			const importInfo: ImportInfo = {
+				moduleSpecifier: "../_components/ChapterSection",
+				sourceFile: "/project/src/app/novel/[id]/_containers/NovelDetailContainer.tsx",
+				resolvedPath: "/project/src/app/novel/[id]/_components/ChapterSection.tsx",
+				isExternal: false,
+				line: 10,
+				column: 0,
+			};
+			const rules = createRuleWithDirectory({
+				directory: "/project/src/app/novel/[id]/_containers",
+				mode: "deny-first",
+				allow: ["../_components/**"],
+				deny: ["../../_containers/**"],
+			});
+			expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+		});
+	});
+});

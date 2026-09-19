@@ -1,5 +1,8 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { isExternalImport } from "./import-collector.js";
+import { collectImports, isExternalImport } from "./import-collector.js";
+import { createProject } from "./project.js";
+import type { ImportInfo } from "./types.js";
 
 describe("isExternalImport", () => {
 	describe("relative imports", () => {
@@ -56,5 +59,61 @@ describe("isExternalImport", () => {
 			expect(isExternalImport("node:fs", null)).toBe(true);
 			expect(isExternalImport("node:path", null)).toBe(true);
 		});
+	});
+});
+
+// See https://github.com/Glider2355/zonefence/issues/14
+describe("collectImports - dynamic import() and require()", () => {
+	const fixtureDir = path.resolve(__dirname, "../../test-fixtures/dynamic-imports");
+
+	function collectConsumerImports(): ImportInfo[] {
+		const project = createProject({ rootDir: fixtureDir });
+		return collectImports(project, fixtureDir).filter((importInfo) =>
+			importInfo.sourceFile.endsWith("consumer.ts"),
+		);
+	}
+
+	it("should collect a dynamic import of an external package", () => {
+		const collected = collectConsumerImports();
+		const dynamicExternal = collected.find(
+			(importInfo) => importInfo.moduleSpecifier === "@opennextjs/cloudflare",
+		);
+
+		expect(dynamicExternal).toBeDefined();
+		expect(dynamicExternal?.isExternal).toBe(true);
+	});
+
+	it("should collect and resolve a dynamic import of a local module", () => {
+		const collected = collectConsumerImports();
+		const dynamicLocal = collected.find(
+			(importInfo) => importInfo.moduleSpecifier === "./target.js",
+		);
+
+		expect(dynamicLocal).toBeDefined();
+		expect(dynamicLocal?.isExternal).toBe(false);
+		// A ".js" specifier resolves to the TypeScript source
+		expect(dynamicLocal?.resolvedPath).toBe(path.join(fixtureDir, "target.ts"));
+	});
+
+	it("should collect a require() call", () => {
+		const collected = collectConsumerImports();
+
+		expect(collected.some((importInfo) => importInfo.moduleSpecifier === "node:fs")).toBe(true);
+	});
+
+	it("should skip non-literal specifiers such as template literals", () => {
+		const collected = collectConsumerImports();
+
+		expect(collected.some((importInfo) => importInfo.moduleSpecifier.includes("${"))).toBe(false);
+		expect(collected).toHaveLength(3);
+	});
+
+	it("should record the line number of the dynamic import", () => {
+		const collected = collectConsumerImports();
+		const dynamicExternal = collected.find(
+			(importInfo) => importInfo.moduleSpecifier === "@opennextjs/cloudflare",
+		);
+
+		expect(dynamicExternal?.line).toBe(2);
 	});
 });

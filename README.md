@@ -63,6 +63,10 @@ imports:
   mode: allow-first  # default
 ```
 
+Unknown keys are rejected, so a typo (`mesage:`) fails validation with the offending
+file and key instead of being silently ignored. `reason` is accepted as an alias of
+`message`.
+
 ### Configuration Options
 
 | Option | Description | Default |
@@ -74,6 +78,8 @@ imports:
 | `imports.allow` | List of allowed import patterns | `[]` |
 | `imports.deny` | List of denied import patterns | `[]` |
 | `imports.mode` | Evaluation mode (`allow-first`: allow list priority, `deny-first`: deny list priority) | `allow-first` |
+| `imports.allow[].from` / `imports.deny[].from` | Import pattern to match | Required |
+| `imports.allow[].message` / `imports.deny[].message` | Message shown when the rule is violated (alias: `reason`) | - |
 
 ### Evaluation Modes
 
@@ -101,6 +107,40 @@ imports:
   allow:
     - from: "src/api/**"      # Matches resolved path
     - from: "src/shared/**"
+```
+
+### Relative Patterns
+
+Patterns starting with `./` or `../` are resolved against **the directory that owns the
+rule** — for `directoryPatterns`, the directory the pattern matched — not against the
+directory of the importing file. This means one rule applies uniformly to files nested
+inside that directory:
+
+```
+src/packages/novel/
+├── core/
+└── use-case/
+    ├── zonefence.yaml      # allow: ["./**", "../core/**"]
+    └── novel/
+        └── NovelUseCase.ts # may import from ../core/**
+```
+
+Directory names containing glob metacharacters are handled literally, so Next.js
+dynamic routes (`[id]`) and route groups (`(group)`) match as expected — both when
+they come from the resolved directory and when you write them into the pattern
+(`../../[otherId]/_components/**`). A segment that is entirely bracketed is treated as
+a directory name; a character class embedded in a larger segment (`v[0-9]`) keeps its
+glob meaning.
+
+```yaml
+# src/zonefence.yaml
+directoryPatterns:
+  - pattern: "**/_containers"
+    config:
+      imports:
+        allow:
+          - from: "../_components/**"   # matches app/novel/[id]/_components/**
+          - from: "./**"
 ```
 
 ### Path Aliases
@@ -138,6 +178,20 @@ imports:
     - from: "axios"
       message: "Use fetch instead"
 ```
+
+### Dynamic Imports
+
+Static `import` / `export ... from`, dynamic `import("...")`, and `require("...")` are
+all checked:
+
+```ts
+const { getCloudflareContext } = await import("@opennextjs/cloudflare"); // checked
+const Heavy = dynamic(() => import("@/app/foo/_components/Heavy"));      // checked
+const fs = require("node:fs");                                          // checked
+```
+
+Calls whose specifier is not a string literal (a template literal or a variable) have
+no specifier to match against and are skipped.
 
 ## Rule Inheritance
 
@@ -253,6 +307,44 @@ npx zonefence check [path] [options]
 |--------|-------------|
 | `-c, --config <path>` | Path to tsconfig.json |
 | `--no-color` | Disable colored output |
+| `--reporter <name>` | Output format: `console` (default), `json`, `github` |
+
+Exit code is `1` when there is at least one violation, otherwise `0`.
+
+### Reporters
+
+`--reporter json` prints a structured report on stdout, with paths relative to the
+working directory:
+
+```json
+{
+  "violations": [
+    {
+      "file": "src/core/Novel.ts",
+      "line": 3,
+      "column": 0,
+      "moduleSpecifier": "hono",
+      "message": "Core layer cannot depend on an HTTP framework",
+      "rule": "import-boundary",
+      "ruleFilePath": "src/core/zonefence.yaml",
+      "designIntent": "Core layer - pure business logic"
+    }
+  ],
+  "summary": { "errorCount": 1, "filesChecked": 4, "importsChecked": 12 }
+}
+```
+
+`--reporter github` emits GitHub Actions error annotations, so violations show up on
+the offending lines of a pull request:
+
+```
+::error file=src/core/Novel.ts,line=3,col=0,title=zonefence(import-boundary)::Core layer cannot depend on an HTTP framework
+```
+
+```yaml
+# .github/workflows/zonefence.yml
+- run: npx zonefence check ./src --reporter github
+```
 
 ## Development
 

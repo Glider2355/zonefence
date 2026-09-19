@@ -1,5 +1,5 @@
 import path from "node:path";
-import { minimatch } from "minimatch";
+import { escape as escapeGlob, minimatch } from "minimatch";
 import type { ImportInfo } from "../core/types.js";
 import type { ImportRule, ResolvedRule } from "../rules/types.js";
 import type { EvaluateOptions, PathsMapping, Violation } from "./types.js";
@@ -24,6 +24,10 @@ export function evaluateImportBoundary(
 	}
 
 	const { config, ruleFilePath } = applicableRule;
+	// Relative patterns are resolved against the directory that owns the rule
+	// (for directoryPatterns, the matched directory), not against the directory of
+	// the importing file, so that a rule applies uniformly to nested files.
+	const patternBaseDir = applicableRule.directory;
 	const imports = config.imports;
 
 	if (!imports) {
@@ -48,7 +52,7 @@ export function evaluateImportBoundary(
 			pathToMatch,
 			moduleSpecifier,
 			denyRules,
-			importInfo.sourceFile,
+			patternBaseDir,
 			rootDir,
 			isExternal,
 			pathsMapping,
@@ -63,7 +67,7 @@ export function evaluateImportBoundary(
 				pathToMatch,
 				moduleSpecifier,
 				allowRules,
-				importInfo.sourceFile,
+				patternBaseDir,
 				rootDir,
 				isExternal,
 				pathsMapping,
@@ -86,7 +90,7 @@ export function evaluateImportBoundary(
 			pathToMatch,
 			moduleSpecifier,
 			allowRules,
-			importInfo.sourceFile,
+			patternBaseDir,
 			rootDir,
 			isExternal,
 			pathsMapping,
@@ -99,7 +103,7 @@ export function evaluateImportBoundary(
 			pathToMatch,
 			moduleSpecifier,
 			denyRules,
-			importInfo.sourceFile,
+			patternBaseDir,
 			rootDir,
 			isExternal,
 			pathsMapping,
@@ -154,7 +158,14 @@ function getPathToMatch(importInfo: ImportInfo, rootDir: string): string {
 		return path.relative(rootDir, importInfo.resolvedPath);
 	}
 
-	// For unresolved local imports, use the module specifier
+	// For unresolved local imports (non-TS assets, missing files), normalize the
+	// specifier against the importing file's directory so that it can still be
+	// compared against resolved-path style patterns.
+	if (importInfo.moduleSpecifier.startsWith(".")) {
+		const sourceDir = path.dirname(importInfo.sourceFile);
+		return path.relative(rootDir, path.resolve(sourceDir, importInfo.moduleSpecifier));
+	}
+
 	return importInfo.moduleSpecifier;
 }
 
@@ -162,21 +173,21 @@ function findMatchingRule(
 	pathToMatch: string,
 	moduleSpecifier: string,
 	rules: ImportRule[],
-	sourceFile: string,
+	patternBaseDir: string,
 	rootDir: string,
 	isExternal: boolean,
 	pathsMapping?: PathsMapping,
 ): ImportRule | null {
 	for (const rule of rules) {
 		// First, try matching against the resolved path
-		if (matchesPattern(pathToMatch, rule.from, sourceFile, rootDir, isExternal, pathsMapping)) {
+		if (matchesPattern(pathToMatch, rule.from, patternBaseDir, rootDir, isExternal, pathsMapping)) {
 			return rule;
 		}
 		// Also try matching against the original module specifier
 		// This allows patterns like "@/api/**" or "@image-router/*" to work
 		if (
 			pathToMatch !== moduleSpecifier &&
-			matchesPattern(moduleSpecifier, rule.from, sourceFile, rootDir, isExternal, pathsMapping)
+			matchesPattern(moduleSpecifier, rule.from, patternBaseDir, rootDir, isExternal, pathsMapping)
 		) {
 			return rule;
 		}
@@ -229,19 +240,78 @@ function resolvePatternWithPaths(pattern: string, pathsMapping?: PathsMapping): 
 	return resolvedPatterns;
 }
 
+/** Glob metacharacters that minimatch gives special meaning to. */
+const GLOB_META = /[*?[\]{}()!+@|]/;
+
+/**
+ * A whole segment wrapped in brackets -- a Next.js dynamic route segment such as
+ * `[id]`, `[...slug]` or `[[...slug]]`.
+ *
+ * Written as a character class this would match a single character, which is
+ * never what a path pattern means, so such a segment is treated as a literal
+ * directory name. A character class embedded in a larger segment (`v[0-9]`)
+ * keeps its glob meaning.
+ */
+const DYNAMIC_ROUTE_SEGMENT = /^\[+[^[\]]+\]+$/;
+
+function isLiteralSegment(segment: string): boolean {
+	return !GLOB_META.test(segment) || DYNAMIC_ROUTE_SEGMENT.test(segment);
+}
+
+/**
+ * Split a pattern into its leading literal path segments and the remaining glob.
+ * e.g. "../**\/_components/**" -> { literal: "..", glob: "**\/_components/**" }
+ */
+function splitPatternPrefix(pattern: string): { literal: string; glob: string } {
+	const segments = pattern.split("/");
+	let globStart = segments.length;
+
+	for (let i = 0; i < segments.length; i++) {
+		if (!isLiteralSegment(segments[i])) {
+			globStart = i;
+			break;
+		}
+	}
+
+	return {
+		literal: segments.slice(0, globStart).join("/"),
+		glob: segments.slice(globStart).join("/"),
+	};
+}
+
+/**
+ * Resolve a relative pattern against a base directory.
+ *
+ * Only the literal prefix is resolved against the filesystem, and it is escaped
+ * before being handed to minimatch. Without escaping, directory names that
+ * contain glob metacharacters -- Next.js dynamic routes (`[id]`) and route
+ * groups (`(group)`) -- would be interpreted as character classes and never
+ * match. The glob part of the pattern is user-authored and passes through.
+ */
+function resolveRelativePattern(pattern: string, baseDir: string, rootDir: string): string {
+	const { literal, glob } = splitPatternPrefix(pattern);
+	const literalAbsolute = path.resolve(baseDir, literal);
+	const literalRelative = path.relative(rootDir, literalAbsolute);
+	const escapedLiteral = literalRelative === "" ? "" : escapeGlob(literalRelative);
+
+	if (glob === "") {
+		return escapedLiteral;
+	}
+
+	return escapedLiteral === "" ? glob : `${escapedLiteral}/${glob}`;
+}
+
 function matchesPattern(
 	pathToMatch: string,
 	pattern: string,
-	sourceFile: string,
+	patternBaseDir: string,
 	rootDir: string,
 	isExternal: boolean,
 	pathsMapping?: PathsMapping,
 ): boolean {
-	// Handle relative patterns (starting with ./)
+	// Handle relative patterns (starting with ./ or ../)
 	if (pattern.startsWith("./") || pattern.startsWith("../")) {
-		// Resolve pattern relative to source file's directory
-		const sourceDir = path.dirname(sourceFile);
-		const resolvedPattern = path.relative(rootDir, path.resolve(sourceDir, pattern));
+		const resolvedPattern = resolveRelativePattern(pattern, patternBaseDir, rootDir);
 		return minimatch(pathToMatch, resolvedPattern);
 	}
 
