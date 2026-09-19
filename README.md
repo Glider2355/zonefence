@@ -126,7 +126,11 @@ src/packages/novel/
 ```
 
 Directory names containing glob metacharacters are handled literally, so Next.js
-dynamic routes (`[id]`) and route groups (`(group)`) match as expected:
+dynamic routes (`[id]`) and route groups (`(group)`) match as expected — both when
+they come from the resolved directory and when you write them into the pattern
+(`../../[otherId]/_components/**`). A segment that is entirely bracketed is treated as
+a directory name; a character class embedded in a larger segment (`v[0-9]`) keeps its
+glob meaning.
 
 ```yaml
 # src/zonefence.yaml

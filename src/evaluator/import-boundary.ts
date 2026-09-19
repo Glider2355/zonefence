@@ -244,6 +244,21 @@ function resolvePatternWithPaths(pattern: string, pathsMapping?: PathsMapping): 
 const GLOB_META = /[*?[\]{}()!+@|]/;
 
 /**
+ * A whole segment wrapped in brackets -- a Next.js dynamic route segment such as
+ * `[id]`, `[...slug]` or `[[...slug]]`.
+ *
+ * Written as a character class this would match a single character, which is
+ * never what a path pattern means, so such a segment is treated as a literal
+ * directory name. A character class embedded in a larger segment (`v[0-9]`)
+ * keeps its glob meaning.
+ */
+const DYNAMIC_ROUTE_SEGMENT = /^\[+[^[\]]+\]+$/;
+
+function isLiteralSegment(segment: string): boolean {
+	return !GLOB_META.test(segment) || DYNAMIC_ROUTE_SEGMENT.test(segment);
+}
+
+/**
  * Split a pattern into its leading literal path segments and the remaining glob.
  * e.g. "../**\/_components/**" -> { literal: "..", glob: "**\/_components/**" }
  */
@@ -252,7 +267,7 @@ function splitPatternPrefix(pattern: string): { literal: string; glob: string } 
 	let globStart = segments.length;
 
 	for (let i = 0; i < segments.length; i++) {
-		if (GLOB_META.test(segments[i])) {
+		if (!isLiteralSegment(segments[i])) {
 			globStart = i;
 			break;
 		}

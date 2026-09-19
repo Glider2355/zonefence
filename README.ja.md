@@ -125,7 +125,10 @@ src/packages/novel/
 ```
 
 glob のメタ文字を含むディレクトリ名はリテラルとして扱われるため、Next.js の dynamic route
-（`[id]`）や route group（`(group)`）も期待通りマッチします。
+（`[id]`）や route group（`(group)`）も期待通りマッチします。解決されたディレクトリ側だけでなく、
+パターンに直接書いた場合（`../../[otherId]/_components/**`）も同様です。セグメント全体が角括弧で
+囲まれている場合はディレクトリ名として扱い、より大きなセグメントに埋め込まれた文字クラス
+（`v[0-9]`）は glob として解釈されます。
 
 ```yaml
 # src/zonefence.yaml
