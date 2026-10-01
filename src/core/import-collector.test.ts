@@ -159,14 +159,33 @@ describe("collectImportsWithDiagnostics - non-literal specifiers", () => {
 
 // See https://github.com/Glider2355/zonefence/issues/15
 describe("collectImports - type-only imports", () => {
-	const fixtureDir = path.resolve(__dirname, "../../test-fixtures/type-imports");
+	// Kept in memory rather than as a fixture file: a formatter would rewrite the
+	// inline `type` forms into `import type`, erasing the cases under test.
+	const consumerSource = [
+		'import type { NovelGateway } from "./port.js";',
+		'import { type NovelGateway as InlineTypeOnly } from "./port.js";',
+		'import { type NovelGateway as Mixed, gateway } from "./port.js";',
+		'import * as port from "./port.js";',
+		'import "./port.js";',
+		"",
+		'export type { NovelGateway as ReExportedType } from "./port.js";',
+		'export { type NovelGateway as InlineReExportedType } from "./port.js";',
+		'export { gateway as reExportedValue } from "./port.js";',
+		'export * from "./port.js";',
+	].join("\n");
 
 	let cachedKinds: Record<number, string | undefined> | undefined;
 
 	function kindsByLine(): Record<number, string | undefined> {
 		if (!cachedKinds) {
-			const project = createProject({ rootDir: fixtureDir });
-			const collected = collectImports(project, fixtureDir).filter((importInfo) =>
+			const project = new Project({ useInMemoryFileSystem: true });
+			project.createSourceFile(
+				"/src/port.ts",
+				"export interface NovelGateway {}\nexport const gateway: NovelGateway = {};",
+			);
+			project.createSourceFile("/src/consumer.ts", consumerSource);
+
+			const collected = collectImports(project, "/src").filter((importInfo) =>
 				importInfo.sourceFile.endsWith("consumer.ts"),
 			);
 			cachedKinds = Object.fromEntries(
