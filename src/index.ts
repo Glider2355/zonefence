@@ -4,6 +4,15 @@ export { loadRules, loadRulesForDirectoryWithAllDirs } from "./rules/loader.js";
 export { resolveRules, resolveRulesWithPatterns } from "./rules/resolver.js";
 export { evaluate } from "./evaluator/index.js";
 export {
+	reportToConsole,
+	reportToJson,
+	reportToGithub,
+	buildJsonReport,
+	formatGithubAnnotation,
+	REPORTER_NAMES,
+	isReporterName,
+} from "./reporter/index.js";
+export {
 	matchDirectoryPattern,
 	findMatchingPatterns,
 	collectPatternSources,
@@ -17,3 +26,4 @@ export type {
 	PatternRuleConfig,
 } from "./rules/types.js";
 export type { EvaluationResult, Violation } from "./evaluator/types.js";
+export type { JsonReport, JsonViolation, ReporterName } from "./reporter/index.js";

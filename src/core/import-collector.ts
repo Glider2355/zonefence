@@ -1,4 +1,12 @@
-import type { ImportDeclaration, Project, SourceFile } from "ts-morph";
+import path from "node:path";
+import {
+	type CallExpression,
+	type ImportDeclaration,
+	type Project,
+	SyntaxKind,
+	ts,
+} from "ts-morph";
+import type { SourceFile } from "ts-morph";
 import type { ImportInfo } from "./types.js";
 
 export function collectImports(project: Project, rootDir: string): ImportInfo[] {
@@ -21,7 +29,7 @@ function collectImportsFromFile(sourceFile: SourceFile, rootDir: string): Import
 		imports.push(importInfo);
 	}
 
-	// Also collect dynamic imports and re-exports
+	// Re-exports (`export ... from "..."`)
 	for (const exportDecl of sourceFile.getExportDeclarations()) {
 		const moduleSpecifier = exportDecl.getModuleSpecifier();
 		if (moduleSpecifier) {
@@ -41,7 +49,122 @@ function collectImportsFromFile(sourceFile: SourceFile, rootDir: string): Import
 		}
 	}
 
+	// Dynamic `import("...")` and `require("...")` calls, which otherwise bypass
+	// the fence entirely.
+	imports.push(...collectCallExpressionImports(sourceFile, filePath));
+
 	return imports;
+}
+
+/**
+ * Collect `import("...")` and `require("...")` calls with a string literal argument.
+ *
+ * Non-literal arguments (template literals, variables) are skipped: there is no
+ * specifier to match a pattern against.
+ */
+function collectCallExpressionImports(sourceFile: SourceFile, filePath: string): ImportInfo[] {
+	const imports: ImportInfo[] = [];
+
+	for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+		if (!isModuleLoadingCall(call)) {
+			continue;
+		}
+
+		const [firstArgument] = call.getArguments();
+		if (!firstArgument?.isKind(SyntaxKind.StringLiteral)) {
+			continue;
+		}
+
+		const moduleSpecifier = firstArgument.getLiteralValue();
+		const resolvedPath = resolveSpecifierInProject(sourceFile, filePath, moduleSpecifier);
+
+		imports.push({
+			sourceFile: filePath,
+			moduleSpecifier,
+			resolvedPath,
+			isExternal: isExternalImport(moduleSpecifier, resolvedPath),
+			line: call.getStartLineNumber(),
+			column: call.getStart() - call.getStartLinePos(),
+		});
+	}
+
+	return imports;
+}
+
+function isModuleLoadingCall(call: CallExpression): boolean {
+	const expression = call.getExpression();
+
+	// Dynamic import: the callee is the `import` keyword itself
+	if (expression.isKind(SyntaxKind.ImportKeyword)) {
+		return true;
+	}
+
+	// CommonJS require
+	return expression.isKind(SyntaxKind.Identifier) && expression.getText() === "require";
+}
+
+/**
+ * Resolve the specifier of a dynamic `import()` / `require()` call.
+ *
+ * ts-morph offers no `getModuleSpecifierSourceFile` for call expressions, so this
+ * asks TypeScript's module resolution directly. That way a call resolves exactly
+ * like the equivalent import declaration -- tsconfig `paths` aliases included --
+ * and cannot slip past a rule written against the resolved path.
+ */
+function resolveSpecifierInProject(
+	sourceFile: SourceFile,
+	filePath: string,
+	moduleSpecifier: string,
+): string | null {
+	const project = sourceFile.getProject();
+	const { resolvedModule } = ts.resolveModuleName(
+		moduleSpecifier,
+		filePath,
+		project.getCompilerOptions(),
+		project.getModuleResolutionHost(),
+	);
+
+	if (resolvedModule) {
+		return resolvedModule.resolvedFileName;
+	}
+
+	return resolveRelativeSpecifierInProject(project, filePath, moduleSpecifier);
+}
+
+/**
+ * Fallback for relative specifiers the compiler options do not resolve (e.g. a
+ * ".js" specifier under classic resolution): look for the usual TypeScript
+ * candidates among the files loaded into the project.
+ */
+function resolveRelativeSpecifierInProject(
+	project: Project,
+	filePath: string,
+	moduleSpecifier: string,
+): string | null {
+	if (!moduleSpecifier.startsWith(".")) {
+		return null;
+	}
+
+	const base = path.resolve(path.dirname(filePath), moduleSpecifier);
+
+	// A ".js" specifier in a TS project usually points at the ".ts" source
+	const withoutJsExtension = base.replace(/\.(js|jsx|mjs|cjs)$/, "");
+	const extensions = ["", ".ts", ".tsx", ".d.ts"];
+
+	const candidates = [
+		...extensions.map((extension) => `${base}${extension}`),
+		...extensions.map((extension) => `${withoutJsExtension}${extension}`),
+		...["index.ts", "index.tsx"].map((indexFile) => path.join(base, indexFile)),
+	];
+
+	for (const candidate of candidates) {
+		const resolved = project.getSourceFile(candidate);
+		if (resolved) {
+			return resolved.getFilePath();
+		}
+	}
+
+	return null;
 }
 
 function parseImportDeclaration(

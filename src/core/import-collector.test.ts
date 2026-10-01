@@ -1,5 +1,9 @@
+import path from "node:path";
+import { Project } from "ts-morph";
 import { describe, expect, it } from "vitest";
-import { isExternalImport } from "./import-collector.js";
+import { collectImports, isExternalImport } from "./import-collector.js";
+import { createProject } from "./project.js";
+import type { ImportInfo } from "./types.js";
 
 describe("isExternalImport", () => {
 	describe("relative imports", () => {
@@ -56,5 +60,102 @@ describe("isExternalImport", () => {
 			expect(isExternalImport("node:fs", null)).toBe(true);
 			expect(isExternalImport("node:path", null)).toBe(true);
 		});
+	});
+});
+
+// See https://github.com/Glider2355/zonefence/issues/14
+describe("collectImports - dynamic import() and require()", () => {
+	const fixtureDir = path.resolve(__dirname, "../../test-fixtures/dynamic-imports");
+
+	function collectConsumerImports(): ImportInfo[] {
+		const project = createProject({ rootDir: fixtureDir });
+		return collectImports(project, fixtureDir).filter((importInfo) =>
+			importInfo.sourceFile.endsWith("consumer.ts"),
+		);
+	}
+
+	it("should collect a dynamic import of an external package", () => {
+		const collected = collectConsumerImports();
+		const dynamicExternal = collected.find(
+			(importInfo) => importInfo.moduleSpecifier === "@opennextjs/cloudflare",
+		);
+
+		expect(dynamicExternal).toBeDefined();
+		expect(dynamicExternal?.isExternal).toBe(true);
+	});
+
+	it("should collect and resolve a dynamic import of a local module", () => {
+		const collected = collectConsumerImports();
+		const dynamicLocal = collected.find(
+			(importInfo) => importInfo.moduleSpecifier === "./target.js",
+		);
+
+		expect(dynamicLocal).toBeDefined();
+		expect(dynamicLocal?.isExternal).toBe(false);
+		// A ".js" specifier resolves to the TypeScript source
+		expect(dynamicLocal?.resolvedPath).toBe(path.join(fixtureDir, "target.ts"));
+	});
+
+	it("should collect a require() call", () => {
+		const collected = collectConsumerImports();
+
+		expect(collected.some((importInfo) => importInfo.moduleSpecifier === "node:fs")).toBe(true);
+	});
+
+	it("should skip non-literal specifiers such as template literals", () => {
+		const collected = collectConsumerImports();
+
+		expect(collected.some((importInfo) => importInfo.moduleSpecifier.includes("${"))).toBe(false);
+		expect(collected).toHaveLength(3);
+	});
+
+	it("should record the line number of the dynamic import", () => {
+		const collected = collectConsumerImports();
+		const dynamicExternal = collected.find(
+			(importInfo) => importInfo.moduleSpecifier === "@opennextjs/cloudflare",
+		);
+
+		expect(dynamicExternal?.line).toBe(2);
+	});
+});
+
+describe("collectImports - dynamic imports through a path alias", () => {
+	function collectFrom(code: string): ImportInfo[] {
+		const project = new Project({
+			useInMemoryFileSystem: true,
+			compilerOptions: { baseUrl: "/project", paths: { "@/*": ["./src/*"] } },
+		});
+		project.createSourceFile("/project/src/infra/db.ts", "export const db = 1;");
+		project.createSourceFile("/project/src/app/page.ts", code);
+
+		return collectImports(project, "/project/src").filter((importInfo) =>
+			importInfo.sourceFile.endsWith("page.ts"),
+		);
+	}
+
+	// Otherwise a rule written against the resolved path (`../infra/**`) catches
+	// `import { db } from "@/infra/db"` but not `await import("@/infra/db")`.
+	it("should resolve an aliased import() like the equivalent import declaration", () => {
+		const [declaration, call] = collectFrom(
+			'import { db } from "@/infra/db";\nexport const load = () => import("@/infra/db");\nexport { db };',
+		);
+
+		expect(declaration.resolvedPath).toBe("/project/src/infra/db.ts");
+		expect(call.resolvedPath).toBe(declaration.resolvedPath);
+		expect(call.isExternal).toBe(false);
+	});
+
+	it("should resolve an aliased require()", () => {
+		const [call] = collectFrom('export const db = require("@/infra/db");');
+
+		expect(call.resolvedPath).toBe("/project/src/infra/db.ts");
+		expect(call.isExternal).toBe(false);
+	});
+
+	it("should leave an unresolvable bare specifier external", () => {
+		const [call] = collectFrom('export const load = () => import("some-package");');
+
+		expect(call.resolvedPath).toBeNull();
+		expect(call.isExternal).toBe(true);
 	});
 });

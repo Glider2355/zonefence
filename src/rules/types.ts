@@ -5,6 +5,12 @@ export type MergeStrategy = "merge" | "override";
 export interface ImportRule {
 	from: string;
 	message?: string;
+	/**
+	 * Directory a relative `from` is resolved against. Set by the resolver on rules
+	 * inherited from a parent directory, so that they keep pointing at the same
+	 * place; otherwise the directory the rule applies to is used.
+	 */
+	baseDir?: string;
 }
 
 export interface PatternRuleConfig {

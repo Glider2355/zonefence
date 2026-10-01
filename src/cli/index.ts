@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { Command } from "commander";
+import { REPORTER_NAMES } from "../reporter/types.js";
 import { checkCommand } from "./commands/check.js";
 
 const program = new Command();
@@ -16,6 +17,7 @@ program
 	.argument("[path]", "Path to check", ".")
 	.option("-c, --config <path>", "Path to tsconfig.json")
 	.option("--no-color", "Disable colored output")
+	.option("--reporter <name>", `Output format (${REPORTER_NAMES.join(" | ")})`, "console")
 	.action(checkCommand);
 
 program.parse();
