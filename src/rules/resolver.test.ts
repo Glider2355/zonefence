@@ -352,3 +352,44 @@ describe("resolving files rules", () => {
 		expect(resolveRules(rulesByDirectory)[0].config.files).toBeUndefined();
 	});
 });
+
+describe("inherited relative patterns", () => {
+	const rulesByDirectory: RulesByDirectory = {
+		"/root/src": {
+			config: {
+				version: 1,
+				imports: { allow: [{ from: "./shared/**" }, { from: "lodash" }] },
+			},
+			ruleFilePath: "/root/src/zonefence.yaml",
+		},
+		"/root/src/features": {
+			config: {
+				version: 1,
+				imports: { allow: [{ from: "./**" }], deny: [{ from: "../infra/**" }] },
+			},
+			ruleFilePath: "/root/src/features/zonefence.yaml",
+		},
+	};
+
+	it("should pin a relative pattern inherited from a parent to the parent directory", () => {
+		for (const resolved of [
+			resolveRules(rulesByDirectory),
+			resolveRulesWithPatterns(rulesByDirectory, Object.keys(rulesByDirectory)),
+		]) {
+			const features = resolved.find((rule) => rule.directory === "/root/src/features");
+
+			expect(features?.config.imports?.allow).toEqual([
+				{ from: "./shared/**", baseDir: "/root/src" },
+				{ from: "lodash" },
+				{ from: "./**" },
+			]);
+			expect(features?.config.imports?.deny).toEqual([{ from: "../infra/**" }]);
+		}
+	});
+
+	it("should leave the rules of the directory that wrote them untouched", () => {
+		const src = resolveRules(rulesByDirectory).find((rule) => rule.directory === "/root/src");
+
+		expect(src?.config.imports?.allow).toEqual([{ from: "./shared/**" }, { from: "lodash" }]);
+	});
+});

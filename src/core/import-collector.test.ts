@@ -231,3 +231,44 @@ describe("collectImports - type-only imports", () => {
 		expect(dynamicImports.every((importInfo) => importInfo.kind === "value")).toBe(true);
 	});
 });
+
+describe("collectImports - dynamic imports through a path alias", () => {
+	function collectFrom(code: string): ImportInfo[] {
+		const project = new Project({
+			useInMemoryFileSystem: true,
+			compilerOptions: { baseUrl: "/project", paths: { "@/*": ["./src/*"] } },
+		});
+		project.createSourceFile("/project/src/infra/db.ts", "export const db = 1;");
+		project.createSourceFile("/project/src/app/page.ts", code);
+
+		return collectImports(project, "/project/src").filter((importInfo) =>
+			importInfo.sourceFile.endsWith("page.ts"),
+		);
+	}
+
+	// Otherwise a rule written against the resolved path (`../infra/**`) catches
+	// `import { db } from "@/infra/db"` but not `await import("@/infra/db")`.
+	it("should resolve an aliased import() like the equivalent import declaration", () => {
+		const [declaration, call] = collectFrom(
+			'import { db } from "@/infra/db";\nexport const load = () => import("@/infra/db");\nexport { db };',
+		);
+
+		expect(declaration.resolvedPath).toBe("/project/src/infra/db.ts");
+		expect(call.resolvedPath).toBe(declaration.resolvedPath);
+		expect(call.isExternal).toBe(false);
+	});
+
+	it("should resolve an aliased require()", () => {
+		const [call] = collectFrom('export const db = require("@/infra/db");');
+
+		expect(call.resolvedPath).toBe("/project/src/infra/db.ts");
+		expect(call.isExternal).toBe(false);
+	});
+
+	it("should leave an unresolvable bare specifier external", () => {
+		const [call] = collectFrom('export const load = () => import("some-package");');
+
+		expect(call.resolvedPath).toBeNull();
+		expect(call.isExternal).toBe(true);
+	});
+});

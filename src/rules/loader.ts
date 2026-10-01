@@ -73,10 +73,19 @@ function formatConfigError(filePath: string, error: z.ZodError): string {
 	return `Invalid configuration in ${filePath}\n${details}`;
 }
 
+/** A YAML syntax error does not say which file it is in; add it. */
+function parseYamlFile(filePath: string, content: string): unknown {
+	try {
+		return parseYaml(content);
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		throw new Error(`Invalid YAML in ${filePath}\n  ${detail}`);
+	}
+}
+
 function parseRuleFile(filePath: string): ZoneFenceConfig {
 	const content = fs.readFileSync(filePath, "utf-8");
-	const parsed = parseYaml(content);
-	const result = validateConfig(parsed);
+	const result = validateConfig(parseYamlFile(filePath, content));
 
 	if (!result.success) {
 		throw new Error(formatConfigError(filePath, result.error));

@@ -207,12 +207,45 @@ function findParentRules(
 			// Only include if scope.apply is "descendants"
 			const scopeApply = parentConfig.scope?.apply ?? "descendants";
 			if (scopeApply === "descendants") {
-				parents.push(parentConfig);
+				parents.push(anchorRelativePatterns(parentConfig, potentialParent));
 			}
 		}
 	}
 
 	return parents;
+}
+
+function isRelativePattern(pattern: string): boolean {
+	return pattern.startsWith("./") || pattern.startsWith("../");
+}
+
+/**
+ * Pin the relative patterns of a config to the directory it was written in.
+ *
+ * Once merged into a descendant's config the rules no longer say where they came
+ * from, and `./shared/**` written in `src/` would be resolved against the
+ * descendant instead.
+ */
+function anchorRelativePatterns(config: ZoneFenceConfig, directory: string): ZoneFenceConfig {
+	if (!config.imports) {
+		return config;
+	}
+
+	const anchor = (rules?: ImportRule[]): ImportRule[] | undefined =>
+		rules?.map((rule) =>
+			isRelativePattern(rule.from) && rule.baseDir === undefined
+				? { ...rule, baseDir: directory }
+				: rule,
+		);
+
+	return {
+		...config,
+		imports: {
+			...config.imports,
+			allow: anchor(config.imports.allow),
+			deny: anchor(config.imports.deny),
+		},
+	};
 }
 
 function mergeConfigs(parents: ZoneFenceConfig[], child: ZoneFenceConfig): ZoneFenceConfig {

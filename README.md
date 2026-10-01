@@ -319,6 +319,9 @@ src/
     └── zonefence.yaml     # Child rule (inherits + extends parent)
 ```
 
+An inherited relative pattern keeps pointing at the same place: `./shared/**` written in
+`src/zonefence.yaml` still means `src/shared/**` for the files under `src/domain/`.
+
 With `scope.apply: self`, the rule applies only to the current folder and is not inherited by child folders.
 
 ## Directory Patterns (Colocation Support)
@@ -460,13 +463,16 @@ present for import violations only.
 violations show up on the offending lines of a pull request:
 
 ```
-::error file=src/core/Novel.ts,line=3,col=0,title=zonefence(import-boundary)::Core layer cannot depend on an HTTP framework
+::error file=src/core/Novel.ts,line=3,col=1,title=zonefence(import-boundary)::Core layer cannot depend on an HTTP framework
 ```
 
 ```yaml
 # .github/workflows/zonefence.yml
 - run: npx zonefence check ./src --reporter github
 ```
+
+Annotation paths are relative to the repository root (`GITHUB_WORKSPACE`), so they also
+line up when the check runs from a package directory of a monorepo.
 
 ## Generating Documentation
 

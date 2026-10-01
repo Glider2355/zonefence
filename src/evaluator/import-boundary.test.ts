@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ImportInfo } from "../core/types.js";
-import type { ResolvedRule } from "../rules/types.js";
+import type { ImportRule, ResolvedRule } from "../rules/types.js";
 import { evaluateImportBoundary } from "./import-boundary.js";
 
 // Helper to create ImportInfo for external packages
@@ -383,8 +383,8 @@ describe("relative patterns", () => {
 		directory: string,
 		imports: {
 			mode?: "allow-first" | "deny-first";
-			allow?: { from: string; message?: string }[];
-			deny?: { from: string; message?: string }[];
+			allow?: ImportRule[];
+			deny?: ImportRule[];
 		},
 	): ResolvedRule[] {
 		return [
@@ -525,6 +525,31 @@ describe("relative patterns", () => {
 			const importInfo = createImport(`${rootDir}/app/page.tsx`, "./assets/player.js.txt", null);
 			const rules = createRuleAt(`${rootDir}/app`, { allow: [{ from: "./assets/**" }] });
 			expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+		});
+
+		it("should resolve a rule inherited from a parent against the parent directory", () => {
+			const rules = createRuleAt(`${rootDir}/features`, {
+				allow: [{ from: "./shared/**", baseDir: rootDir }, { from: "./**" }],
+			});
+			const fromParentShared = createImport(
+				`${rootDir}/features/a/a.ts`,
+				"../../shared/s",
+				`${rootDir}/shared/s.ts`,
+			);
+			const fromOwnShared = createImport(
+				`${rootDir}/features/a/a.ts`,
+				"../shared/s",
+				`${rootDir}/features/shared/s.ts`,
+			);
+			const fromElsewhere = createImport(
+				`${rootDir}/features/a/a.ts`,
+				"../../infra/db",
+				`${rootDir}/infra/db.ts`,
+			);
+
+			expect(evaluateImportBoundary(fromParentShared, rules, rootDir)).toBeNull();
+			expect(evaluateImportBoundary(fromOwnShared, rules, rootDir)).toBeNull();
+			expect(evaluateImportBoundary(fromElsewhere, rules, rootDir)).not.toBeNull();
 		});
 	});
 });

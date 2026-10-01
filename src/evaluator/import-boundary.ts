@@ -160,12 +160,17 @@ function findMatchingRule(
 			continue;
 		}
 		// First, try matching against the resolved path
-		if (matchesPattern(pathToMatch, rule.from, context)) {
+		// A rule inherited from a parent directory stays relative to that parent
+		const ruleContext = rule.baseDir ? { ...context, patternBaseDir: rule.baseDir } : context;
+		if (matchesPattern(pathToMatch, rule.from, ruleContext)) {
 			return rule;
 		}
 		// Also try matching against the original module specifier
 		// This allows patterns like "@/api/**" or "@image-router/*" to work
-		if (pathToMatch !== moduleSpecifier && matchesPattern(moduleSpecifier, rule.from, context)) {
+		if (
+			pathToMatch !== moduleSpecifier &&
+			matchesPattern(moduleSpecifier, rule.from, ruleContext)
+		) {
 			return rule;
 		}
 	}

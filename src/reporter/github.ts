@@ -35,14 +35,24 @@ export function formatGithubAnnotation(violation: Violation, cwd: string = proce
 
 	messageParts.push(`Rule: ${path.relative(cwd, violation.ruleFilePath)}`);
 
-	const properties = `file=${file},line=${violation.line},col=${violation.column},title=${title}`;
+	// Violation columns are 0-based; annotation columns are 1-based
+	const column = violation.column + 1;
+	const properties = `file=${file},line=${violation.line},col=${column},title=${title}`;
 
 	const command = isError(violation) ? "error" : "warning";
 
 	return `::${command} ${properties}::${escapeData(messageParts.join("\n"))}`;
 }
 
-export function reportToGithub(result: EvaluationResult, cwd: string = process.cwd()): number {
+/**
+ * Annotations are attached by path relative to the repository root, which is not
+ * the working directory when the check runs inside a package of a monorepo.
+ */
+function annotationRoot(): string {
+	return process.env.GITHUB_WORKSPACE || process.cwd();
+}
+
+export function reportToGithub(result: EvaluationResult, cwd: string = annotationRoot()): number {
 	for (const violation of result.violations) {
 		console.log(formatGithubAnnotation(violation, cwd));
 	}

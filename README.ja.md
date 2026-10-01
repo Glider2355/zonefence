@@ -315,6 +315,9 @@ src/
     └── zonefence.yaml     # 子ルール（親ルールを継承＋追加）
 ```
 
+継承された相対パターンは、書かれた場所を基準にしたままです。`src/zonefence.yaml` に書いた
+`./shared/**` は、`src/domain/` 配下のファイルに対しても `src/shared/**` を指します。
+
 `scope.apply: self` を指定すると、そのルールは自フォルダのみに適用され、子フォルダには継承されません。
 
 ## ディレクトリパターン（コロケーション対応）
@@ -455,13 +458,16 @@ error が1件以上あれば終了コードは `1`、なければ `0` です。w
 違反が PR の該当行に表示されます。
 
 ```
-::error file=src/core/Novel.ts,line=3,col=0,title=zonefence(import-boundary)::Core層はHTTPフレームワークに依存できません
+::error file=src/core/Novel.ts,line=3,col=1,title=zonefence(import-boundary)::Core層はHTTPフレームワークに依存できません
 ```
 
 ```yaml
 # .github/workflows/zonefence.yml
 - run: npx zonefence check ./src --reporter github
 ```
+
+アノテーションのパスはリポジトリルート（`GITHUB_WORKSPACE`）からの相対パスになるため、monorepo の
+パッケージディレクトリで実行した場合も該当行に表示されます。
 
 ## ドキュメント生成
 
