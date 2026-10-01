@@ -4,7 +4,13 @@ import {
 	collectPatternSources,
 	findMatchingPatterns,
 } from "./pattern-matcher.js";
-import type { ImportRule, ResolvedRule, RulesByDirectory, ZoneFenceConfig } from "./types.js";
+import type {
+	FilesConfig,
+	ImportRule,
+	ResolvedRule,
+	RulesByDirectory,
+	ZoneFenceConfig,
+} from "./types.js";
 
 export function resolveRules(rulesByDirectory: RulesByDirectory): ResolvedRule[] {
 	const resolvedRules: ResolvedRule[] = [];
@@ -164,6 +170,9 @@ function applyPatternRule(base: ZoneFenceConfig, match: PatternMatch): ZoneFence
 						mode: config.imports.mode ?? base.imports?.mode ?? "allow-first",
 					}
 				: base.imports,
+			files: config.files
+				? { require: config.files.require ?? [], allow: config.files.allow ?? [] }
+				: base.files,
 		};
 	}
 
@@ -176,6 +185,7 @@ function applyPatternRule(base: ZoneFenceConfig, match: PatternMatch): ZoneFence
 			deny: mergeImportRules(base.imports?.deny, config.imports?.deny),
 			mode: config.imports?.mode ?? base.imports?.mode ?? "allow-first",
 		},
+		files: mergeFiles(base.files, config.files),
 	};
 }
 
@@ -246,7 +256,24 @@ function mergeTwoConfigs(base: ZoneFenceConfig, override: ZoneFenceConfig): Zone
 		};
 	}
 
+	// Merge files
+	const files = mergeFiles(base.files, override.files);
+	if (files) {
+		merged.files = files;
+	}
+
 	return merged;
+}
+
+function mergeFiles(base?: FilesConfig, override?: FilesConfig): FilesConfig | undefined {
+	if (!base && !override) {
+		return undefined;
+	}
+
+	return {
+		require: mergeArrays(base?.require, override?.require),
+		allow: mergeArrays(base?.allow, override?.allow),
+	};
 }
 
 function mergeArrays<T>(base?: T[], override?: T[]): T[] {

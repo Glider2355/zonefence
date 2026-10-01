@@ -259,3 +259,96 @@ describe("resolveRulesWithPatterns", () => {
 		expect(pagesContainers?.config.imports?.allow).toContainEqual({ from: "pages-pattern" });
 	});
 });
+
+// See https://github.com/Glider2355/zonefence/issues/16
+describe("resolving files rules", () => {
+	it("should inherit files rules from a parent and merge them with the child's", () => {
+		const rulesByDirectory: RulesByDirectory = {
+			"/root/api": {
+				config: { version: 1, files: { allow: ["index.ts"] } },
+				ruleFilePath: "/root/api/zonefence.yaml",
+			},
+			"/root/api/routes": {
+				config: {
+					version: 1,
+					files: {
+						allow: ["route.ts"],
+						require: [{ for: "*.test.ts", sibling: "{stem}.ts" }],
+					},
+				},
+				ruleFilePath: "/root/api/routes/zonefence.yaml",
+			},
+		};
+
+		const resolved = resolveRules(rulesByDirectory);
+		const routes = resolved.find((rule) => rule.directory === "/root/api/routes");
+
+		expect(routes?.config.files).toEqual({
+			allow: ["index.ts", "route.ts"],
+			require: [{ for: "*.test.ts", sibling: "{stem}.ts" }],
+		});
+	});
+
+	it("should apply files rules from directoryPatterns to directories without a rule file", () => {
+		const rulesByDirectory: RulesByDirectory = {
+			"/root/src": {
+				config: {
+					version: 1,
+					directoryPatterns: [
+						{
+							pattern: "**/ui",
+							config: {
+								files: { require: [{ for: "*.tsx", sibling: "{name}.stories.tsx" }] },
+							},
+						},
+					],
+				},
+				ruleFilePath: "/root/src/zonefence.yaml",
+			},
+		};
+
+		const resolved = resolveRulesWithPatterns(rulesByDirectory, [
+			"/root/src",
+			"/root/src/components",
+			"/root/src/components/ui",
+		]);
+		const ui = resolved.find((rule) => rule.directory === "/root/src/components/ui");
+
+		expect(ui?.config.files?.require).toEqual([{ for: "*.tsx", sibling: "{name}.stories.tsx" }]);
+	});
+
+	it("should replace inherited files rules when a pattern uses mergeStrategy override", () => {
+		const rulesByDirectory: RulesByDirectory = {
+			"/root/src": {
+				config: {
+					version: 1,
+					directoryPatterns: [
+						{ pattern: "**/routes", config: { files: { allow: ["index.ts"] } }, priority: 0 },
+						{
+							pattern: "**/routes",
+							config: { files: { allow: ["route.ts"] }, mergeStrategy: "override" },
+							priority: 10,
+						},
+					],
+				},
+				ruleFilePath: "/root/src/zonefence.yaml",
+			},
+		};
+
+		const resolved = resolveRulesWithPatterns(rulesByDirectory, ["/root/src", "/root/src/routes"]);
+		const routes = resolved.find((rule) => rule.directory === "/root/src/routes");
+
+		expect(routes?.config.files?.allow).toEqual(["route.ts"]);
+	});
+
+	it("should leave files unset when no rule defines them", () => {
+		const rulesByDirectory: RulesByDirectory = {
+			"/root/src": {
+				config: { version: 1, imports: { allow: [{ from: "./**" }] } },
+				ruleFilePath: "/root/src/zonefence.yaml",
+			},
+		};
+
+		expect(resolveRules(rulesByDirectory)[0].config.files).toBeUndefined();
+	});
+});

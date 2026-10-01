@@ -1,0 +1,13 @@
+version: 1
+description: "Route modules"
+
+files:
+  allow:
+    - "route.ts"
+    - "handler.ts"
+    - "index.ts"
+    - "*Dto.ts"
+    - "*.test.ts"
+  require:
+    - for: "**/*.test.ts"
+      sibling: "{stem}.{ts,tsx}"

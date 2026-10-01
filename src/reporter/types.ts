@@ -1,3 +1,5 @@
+import type { EvaluationResult, Violation } from "../evaluator/types.js";
+
 export const REPORTER_NAMES = ["console", "json", "github"] as const;
 
 export type ReporterName = (typeof REPORTER_NAMES)[number];
@@ -17,5 +19,14 @@ export interface ReporterOptions {
 }
 
 export interface Reporter {
-	report(result: import("../evaluator/types.js").EvaluationResult): number;
+	report(result: EvaluationResult): number;
+}
+
+export function isError(violation: Violation): boolean {
+	return violation.severity !== "warning";
+}
+
+/** Only errors fail the check; warnings are reported but exit 0. */
+export function exitCodeFor(result: EvaluationResult): number {
+	return result.violations.some(isError) ? 1 : 0;
 }

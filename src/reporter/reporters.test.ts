@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { EvaluationResult, Violation } from "../evaluator/types.js";
 import { formatGithubAnnotation } from "./github.js";
 import { buildJsonReport } from "./json.js";
-import { isMachineReadable, isReporterName } from "./types.js";
+import { exitCodeFor, isMachineReadable, isReporterName } from "./types.js";
 
 const CWD = "/project";
 
@@ -34,6 +34,7 @@ describe("buildJsonReport", () => {
 				file: "src/core/Novel.ts",
 				line: 3,
 				column: 0,
+				severity: "error",
 				moduleSpecifier: "hono",
 				message: "Core layer cannot depend on an HTTP framework",
 				rule: "import-boundary",
@@ -55,7 +56,33 @@ describe("buildJsonReport", () => {
 	it("should report a summary", () => {
 		const report = buildJsonReport(createResult([createViolation()]), CWD);
 
-		expect(report.summary).toEqual({ errorCount: 1, filesChecked: 4, importsChecked: 12 });
+		expect(report.summary).toEqual({
+			errorCount: 1,
+			warningCount: 0,
+			filesChecked: 4,
+			importsChecked: 12,
+		});
+	});
+
+	it("should count warnings separately from errors", () => {
+		const report = buildJsonReport(
+			createResult([createViolation(), createViolation({ severity: "warning" })]),
+			CWD,
+		);
+
+		expect(report.violations.map((violation) => violation.severity)).toEqual(["error", "warning"]);
+		expect(report.summary.errorCount).toBe(1);
+		expect(report.summary.warningCount).toBe(1);
+	});
+
+	it("should omit moduleSpecifier for violations that are not about an import", () => {
+		const report = buildJsonReport(
+			createResult([createViolation({ rule: "file-placement", moduleSpecifier: undefined })]),
+			CWD,
+		);
+
+		expect(report.violations[0]).not.toHaveProperty("moduleSpecifier");
+		expect(report.violations[0].rule).toBe("file-placement");
 	});
 
 	it("should emit an empty violations array when nothing is wrong", () => {
@@ -74,6 +101,12 @@ describe("formatGithubAnnotation", () => {
 		expect(annotation).toContain("file=src/core/Novel.ts");
 		expect(annotation).toContain("line=3");
 		expect(annotation).toContain("col=0");
+	});
+
+	it("should emit a workflow warning command for a warning", () => {
+		const annotation = formatGithubAnnotation(createViolation({ severity: "warning" }), CWD);
+
+		expect(annotation.startsWith("::warning file=src/core/Novel.ts")).toBe(true);
 	});
 
 	it("should include the message, design intent and rule file", () => {
@@ -126,5 +159,22 @@ describe("reporter names", () => {
 		expect(isMachineReadable("json")).toBe(true);
 		expect(isMachineReadable("github")).toBe(true);
 		expect(isMachineReadable("console")).toBe(false);
+	});
+});
+
+describe("exitCodeFor", () => {
+	it("should fail when there is at least one error", () => {
+		expect(exitCodeFor(createResult([createViolation()]))).toBe(1);
+		expect(
+			exitCodeFor(createResult([createViolation({ severity: "warning" }), createViolation()])),
+		).toBe(1);
+	});
+
+	it("should pass when there are only warnings", () => {
+		expect(exitCodeFor(createResult([createViolation({ severity: "warning" })]))).toBe(0);
+	});
+
+	it("should pass when there are no violations", () => {
+		expect(exitCodeFor(createResult([]))).toBe(0);
 	});
 });

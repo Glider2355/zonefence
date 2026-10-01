@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type { ImportRule } from "./types.js";
 
+const importRuleKindSchema = z.enum(["type", "value", "any"]);
+
 /**
  * A single allow/deny entry.
  *
@@ -13,11 +15,15 @@ const importRuleObjectSchema = z
 		from: z.string(),
 		message: z.string().optional(),
 		reason: z.string().optional(),
+		kind: importRuleKindSchema.optional(),
 	})
 	.strict()
-	.transform(({ from, message, reason }): ImportRule => {
+	.transform(({ from, message, reason, kind }): ImportRule => {
+		const rule: ImportRule = { from };
 		const resolvedMessage = message ?? reason;
-		return resolvedMessage === undefined ? { from } : { from, message: resolvedMessage };
+		if (resolvedMessage !== undefined) rule.message = resolvedMessage;
+		if (kind !== undefined) rule.kind = kind;
+		return rule;
 	});
 
 const importRuleSchema = z.union([
@@ -33,10 +39,27 @@ const importsSchema = z
 	})
 	.strict();
 
+const fileRequireRuleSchema = z
+	.object({
+		for: z.string(),
+		sibling: z.string(),
+		exclude: z.array(z.string()).optional(),
+		message: z.string().optional(),
+	})
+	.strict();
+
+const filesSchema = z
+	.object({
+		require: z.array(fileRequireRuleSchema).optional().default([]),
+		allow: z.array(z.string()).optional().default([]),
+	})
+	.strict();
+
 const patternRuleConfigSchema = z
 	.object({
 		description: z.string().optional(),
 		imports: importsSchema.optional(),
+		files: filesSchema.optional(),
 		mergeStrategy: z.enum(["merge", "override"]).optional().default("merge"),
 	})
 	.strict();
@@ -62,6 +85,7 @@ export const zoneFenceConfigSchema = z
 			.optional()
 			.default({}),
 		imports: importsSchema.optional().default({}),
+		files: filesSchema.optional(),
 		directoryPatterns: z.array(directoryPatternRuleSchema).optional().default([]),
 	})
 	.strict();

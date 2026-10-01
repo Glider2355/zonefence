@@ -1,7 +1,7 @@
 import path from "node:path";
 import chalk from "chalk";
 import type { EvaluationResult, Violation } from "../evaluator/types.js";
-import type { ReporterOptions } from "./types.js";
+import { type ReporterOptions, isError } from "./types.js";
 
 export function reportToConsole(result: EvaluationResult, options: ReporterOptions = {}): number {
 	const { violations, filesChecked, importsChecked } = result;
@@ -20,7 +20,7 @@ export function reportToConsole(result: EvaluationResult, options: ReporterOptio
 			};
 
 	if (violations.length === 0) {
-		console.log(c.green("✓ No import boundary violations found"));
+		console.log(c.green("✓ No violations found"));
 		console.log(c.dim(`  Checked ${importsChecked} imports across ${filesChecked} files`));
 		return 0;
 	}
@@ -34,7 +34,7 @@ export function reportToConsole(result: EvaluationResult, options: ReporterOptio
 
 		for (const violation of fileViolations) {
 			const location = c.dim(`${violation.line}:${violation.column}`);
-			const errorType = c.red("error");
+			const errorType = isError(violation) ? c.red("error") : c.yellow("warning");
 			const rule = c.dim(`(${violation.rule})`);
 
 			console.log(`  ${location}  ${errorType}  ${violation.message}  ${rule}`);
@@ -54,13 +54,27 @@ export function reportToConsole(result: EvaluationResult, options: ReporterOptio
 
 	console.log();
 
-	const errorCount = violations.length;
+	const errorCount = violations.filter(isError).length;
+	const warningCount = violations.length - errorCount;
 	const fileCount = Object.keys(violationsByFile).length;
-	const summary = `✖ ${errorCount} error${errorCount !== 1 ? "s" : ""} in ${fileCount} file${fileCount !== 1 ? "s" : ""}`;
+	const counts = [
+		...(errorCount > 0 ? [pluralize(errorCount, "error")] : []),
+		...(warningCount > 0 ? [pluralize(warningCount, "warning")] : []),
+	].join(", ");
+	const summary = `${counts} in ${pluralize(fileCount, "file")}`;
 
-	console.log(c.red(c.bold(summary)));
+	if (errorCount === 0) {
+		console.log(c.yellow(c.bold(`⚠ ${summary}`)));
+		return 0;
+	}
+
+	console.log(c.red(c.bold(`✖ ${summary}`)));
 
 	return 1;
+}
+
+function pluralize(count: number, noun: string): string {
+	return `${count} ${noun}${count !== 1 ? "s" : ""}`;
 }
 
 function groupByFile(violations: Violation[]): Record<string, Violation[]> {

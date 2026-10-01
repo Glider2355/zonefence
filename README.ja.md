@@ -80,6 +80,9 @@ imports:
 | `imports.mode` | 評価モード（`allow-first`: 許可リスト優先、`deny-first`: 禁止リスト優先） | `allow-first` |
 | `imports.allow[].from` / `imports.deny[].from` | マッチさせる import パターン | 必須 |
 | `imports.allow[].message` / `imports.deny[].message` | 違反時に表示するメッセージ（エイリアス: `reason`） | - |
+| `imports.allow[].kind` / `imports.deny[].kind` | ルールの対象とする import の種類: `type` / `value` / `any`（[型のみの import](#型のみの-import) を参照） | `any` |
+| `files.allow` | 指定すると、いずれかのパターンにマッチするファイルだけが存在できる（[ファイル配置ルール](#ファイル配置ルール) を参照） | `[]` |
+| `files.require` | 対になるファイルが必須のファイル | `[]` |
 
 ### 評価モード
 
@@ -141,6 +144,34 @@ directoryPatterns:
           - from: "./**"
 ```
 
+### 祖先パターン
+
+`^/` で始まるパターンは、**import 元ファイルの任意の祖先ディレクトリ**を起点にします。
+`^/_components/**` は、import 元ファイルのディレクトリからチェック対象のルートまでの各ディレクトリ
+`A` について `A/_components/**` にマッチします。
+
+「ページ私有のコードは、そのページ自身と配下のページからだけ import できる」というコロケーションの
+ルールを表現できます。相対パターンでは表現できません（`../../**/_components/**` は兄弟ページにも
+届いてしまいます）。
+
+```yaml
+# src/zonefence.yaml
+directoryPatterns:
+  - pattern: "**/_components"
+    config:
+      imports:
+        allow:
+          - from: "^/_components/**"
+          - from: "^/_hooks/**"
+          - from: "^/_lib/**"
+```
+
+```
+app/novel/[id]/_components/Foo.tsx                            ← 祖先ページ
+app/novel/[id]/chapter/[chapterId]/edit/_components/Bar.tsx   ← Foo を import してよい
+app/novel/[id]/assets/_components/Baz.tsx                     ← Bar から Baz は NG（兄弟ページ）
+```
+
 ### パスエイリアス
 
 パターンでパスエイリアスを直接使用することもできます。`@/` のようなTypeScriptパスエイリアスを使用しているコードベースで便利です。
@@ -188,8 +219,90 @@ const Heavy = dynamic(() => import("@/app/foo/_components/Heavy"));      // 検�
 const fs = require("node:fs");                                          // 検査される
 ```
 
-引数が文字列リテラルでない呼び出し（テンプレートリテラルや変数）は、マッチ対象となる指定子が
-存在しないためスキップされます。
+引数が文字列リテラルでない呼び出し（式を埋め込んだテンプレートリテラルや変数）は、マッチ対象と
+なる指定子が存在しません。import ルールのあるディレクトリ内では **warning** として報告されます
+（チェックは失敗しません）。`--strict` を付けると error になります。
+
+```
+src/core/loader.ts
+  4:8  warning  Cannot check import(`./${name}.js`): the specifier is not a string literal  (dynamic-import)
+```
+
+### 型のみの import
+
+ルールに `kind` を付けると、型参照と値参照で許可を変えられます。たとえば「use-case は gateway の
+**型**（port の interface）だけ見てよく、実装には依存しない」:
+
+```yaml
+imports:
+  allow:
+    - from: "./**"
+    - from: "../gateway/**"
+      kind: type      # import type { X } / import { type X } のみ許可
+  deny:
+    - from: "../gateway/**"
+      kind: value
+      message: "use-case は gateway の実装に依存しない"
+```
+
+| `kind` | 対象 |
+|--------|------|
+| `type` | `import type { X }`、`import { type X, type Y }`（全ての束縛が型）、`export type { X } from`、`export { type X } from` |
+| `value` | 上記以外。副作用 import、`export * from`、動的 `import()`、`require()` を含む |
+| `any`（デフォルト） | 両方 |
+
+## ファイル配置ルール
+
+import に加えて、フォルダに「あってよいファイル / なければならないファイル」も検査できます。
+
+```yaml
+# src/api/routes/zonefence.yaml
+version: 1
+files:
+  allow:                       # ここに置けるファイル名はこれだけ
+    - "route.ts"
+    - "handler.ts"
+    - "index.ts"
+    - "*Dto.ts"
+    - "*.test.ts"
+  require:
+    - for: "**/*.test.ts"      # テストは対象ファイルと同じディレクトリに置く
+      sibling: "{stem}.{ts,tsx}"
+```
+
+```yaml
+# src/zonefence.yaml — directoryPatterns でも使えます
+directoryPatterns:
+  - pattern: "components/ui"
+    config:
+      files:
+        require:
+          - for: "**/*.tsx"
+            sibling: "{name}.stories.tsx"
+            exclude: ["**/*.test.tsx", "**/*.stories.tsx", "**/*Icon.tsx"]
+            message: "components/ui のコンポーネントは Storybook 必須"
+```
+
+| オプション | 説明 |
+|-----------|------|
+| `files.allow` | glob パターン。1件以上あると、全てのファイルがいずれかにマッチする必要がある |
+| `files.require[].for` | 対になるファイルが必要なファイルを選ぶ glob |
+| `files.require[].sibling` | 同じディレクトリに必要なファイル名。glob として解釈され、下記のプレースホルダが使える |
+| `files.require[].exclude` | この要件から除外するファイルの glob |
+| `files.require[].message` | 対になるファイルがないときに表示するメッセージ |
+
+`sibling` のプレースホルダ（ファイル名が `Button.test.tsx` の場合）:
+
+| プレースホルダ | 値 |
+|---------------|-----|
+| `{name}` | `Button.test` — 最後の拡張子を除いたファイル名 |
+| `{stem}` | `Button` — 最初のドットまでのファイル名 |
+| `{ext}` | `tsx` — 最後の拡張子 |
+
+パターンは、ルールが適用されるディレクトリからの相対パスに対してマッチします。スラッシュを含まない
+パターンはファイル名単体にもマッチするので、`route.ts` はネストしたディレクトリでも有効です。
+拡張子を問わず全てのファイルが対象ですが、ドットファイルと `zonefence.yaml` 自体は除きます。
+`scope.exclude` は通常どおり適用されます。
 
 ## ルールの継承
 
@@ -264,6 +377,7 @@ scope:
 |-----------|------|-----------|
 | `pattern` | マッチするディレクトリのglobパターン（zonefence.yamlの位置からの相対パス） | 必須 |
 | `config.description` | マッチしたディレクトリの説明 | - |
+| `config.files` | マッチしたディレクトリに適用するファイル配置ルール | - |
 | `config.imports` | マッチしたディレクトリのimportルール | - |
 | `config.mergeStrategy` | `"merge"`（他のルールと結合）または `"override"`（置換） | `"merge"` |
 | `priority` | 複数パターンがマッチした場合、優先度が高い方が先に適用される | `0` |
@@ -306,8 +420,9 @@ npx zonefence check [path] [options]
 | `-c, --config <path>` | tsconfig.jsonのパス |
 | `--no-color` | カラー出力を無効化 |
 | `--reporter <name>` | 出力形式: `console`（デフォルト）/ `json` / `github` |
+| `--strict` | warning を error として扱う |
 
-違反が1件以上あれば終了コードは `1`、なければ `0` です。
+error が1件以上あれば終了コードは `1`、なければ `0` です。warning だけではチェックは失敗しません。
 
 ### レポーター
 
@@ -321,6 +436,7 @@ npx zonefence check [path] [options]
       "file": "src/core/Novel.ts",
       "line": 3,
       "column": 0,
+      "severity": "error",
       "moduleSpecifier": "hono",
       "message": "Core層はHTTPフレームワークに依存できません",
       "rule": "import-boundary",
@@ -328,12 +444,15 @@ npx zonefence check [path] [options]
       "designIntent": "Core層 - 純粋なビジネスロジック"
     }
   ],
-  "summary": { "errorCount": 1, "filesChecked": 4, "importsChecked": 12 }
+  "summary": { "errorCount": 1, "warningCount": 0, "filesChecked": 4, "importsChecked": 12 }
 }
 ```
 
-`--reporter github` は GitHub Actions のエラーアノテーションを出力するため、違反が PR の
-該当行に表示されます。
+`rule` は `import-boundary` / `file-placement` / `dynamic-import` のいずれかです。
+`moduleSpecifier` は import の違反にのみ含まれます。
+
+`--reporter github` は GitHub Actions のアノテーション（`::error` / `::warning`）を出力するため、
+違反が PR の該当行に表示されます。
 
 ```
 ::error file=src/core/Novel.ts,line=3,col=0,title=zonefence(import-boundary)::Core層はHTTPフレームワークに依存できません
@@ -343,6 +462,31 @@ npx zonefence check [path] [options]
 # .github/workflows/zonefence.yml
 - run: npx zonefence check ./src --reporter github
 ```
+
+## ドキュメント生成
+
+`zonefence docs` はルールファイルを Markdown の表として出力します。設計ルールの文書を、実際に
+検査されている内容から生成するので、文書と `zonefence.yaml` が乖離しません。
+
+```bash
+npx zonefence docs ./src --out docs/architecture.md --lang ja
+```
+
+| オプション | 説明 |
+|-----------|------|
+| `-o, --out <file>` | ファイルに書き出す（省略時は stdout に出力） |
+| `--lang <lang>` | 見出しの言語: `en`（デフォルト）/ `ja` |
+
+```markdown
+| ディレクトリ | 設計意図 | 許可 | 禁止（理由） |
+| --- | --- | --- | --- |
+| `src/packages/novel/core` | Core層 - 純粋なビジネスロジック | `@/packages/novel/core/**`, `neverthrow` | `hono`（Core層はHTTPフレームワークに依存できません） |
+| `src/pages/**/containers` | Container層 | `../presenters/**` | `../containers/**`（兄弟の containers からは import できません） |
+```
+
+`zonefence.yaml` のあるディレクトリごとに1行、`directoryPatterns` はパターンごとに1行です。
+ルールは書かれたとおりに表示されます（継承は展開しません）。ファイル配置ルールがある場合は
+「ファイル」列が追加されます。
 
 ## 開発
 

@@ -1,6 +1,11 @@
 import path from "node:path";
+import { Project } from "ts-morph";
 import { describe, expect, it } from "vitest";
-import { collectImports, isExternalImport } from "./import-collector.js";
+import {
+	collectImports,
+	collectImportsWithDiagnostics,
+	isExternalImport,
+} from "./import-collector.js";
 import { createProject } from "./project.js";
 import type { ImportInfo } from "./types.js";
 
@@ -115,5 +120,95 @@ describe("collectImports - dynamic import() and require()", () => {
 		);
 
 		expect(dynamicExternal?.line).toBe(2);
+	});
+});
+
+// See https://github.com/Glider2355/zonefence/issues/14
+describe("collectImportsWithDiagnostics - non-literal specifiers", () => {
+	const fixtureDir = path.resolve(__dirname, "../../test-fixtures/dynamic-imports");
+
+	it("should report a dynamic import whose specifier is not a string literal", () => {
+		const project = createProject({ rootDir: fixtureDir });
+		const { unanalyzable } = collectImportsWithDiagnostics(project, fixtureDir);
+
+		expect(unanalyzable).toHaveLength(1);
+		expect(unanalyzable[0].sourceFile).toBe(path.join(fixtureDir, "consumer.ts"));
+		expect(unanalyzable[0].expression).toBe("import(`./${name}.js`)");
+		expect(unanalyzable[0].line).toBe(16);
+	});
+
+	it("should return the same imports as collectImports", () => {
+		const project = createProject({ rootDir: fixtureDir });
+
+		expect(collectImportsWithDiagnostics(project, fixtureDir).imports).toEqual(
+			collectImports(project, fixtureDir),
+		);
+	});
+
+	it("should treat a template literal without substitutions as a literal specifier", () => {
+		const project = new Project({ useInMemoryFileSystem: true });
+		project.createSourceFile("/src/a.ts", "export const load = () => import(`./b`);");
+		project.createSourceFile("/src/b.ts", "export const b = 1;");
+
+		const { imports, unanalyzable } = collectImportsWithDiagnostics(project, "/src");
+
+		expect(unanalyzable).toEqual([]);
+		expect(imports.map((importInfo) => importInfo.resolvedPath)).toEqual(["/src/b.ts"]);
+	});
+});
+
+// See https://github.com/Glider2355/zonefence/issues/15
+describe("collectImports - type-only imports", () => {
+	const fixtureDir = path.resolve(__dirname, "../../test-fixtures/type-imports");
+
+	let cachedKinds: Record<number, string | undefined> | undefined;
+
+	function kindsByLine(): Record<number, string | undefined> {
+		if (!cachedKinds) {
+			const project = createProject({ rootDir: fixtureDir });
+			const collected = collectImports(project, fixtureDir).filter((importInfo) =>
+				importInfo.sourceFile.endsWith("consumer.ts"),
+			);
+			cachedKinds = Object.fromEntries(
+				collected.map((importInfo) => [importInfo.line, importInfo.kind]),
+			);
+		}
+		return cachedKinds;
+	}
+
+	it("should classify `import type` as type", () => {
+		expect(kindsByLine()[1]).toBe("type");
+	});
+
+	it("should classify an import whose named bindings are all inline types as type", () => {
+		expect(kindsByLine()[2]).toBe("type");
+	});
+
+	it("should classify a mixed type and value import as value", () => {
+		expect(kindsByLine()[3]).toBe("value");
+	});
+
+	it("should classify namespace and side-effect imports as value", () => {
+		expect(kindsByLine()[4]).toBe("value");
+		expect(kindsByLine()[5]).toBe("value");
+	});
+
+	it("should classify `export type { } from` and all-inline-type re-exports as type", () => {
+		expect(kindsByLine()[7]).toBe("type");
+		expect(kindsByLine()[8]).toBe("type");
+	});
+
+	it("should classify value re-exports and `export *` as value", () => {
+		expect(kindsByLine()[9]).toBe("value");
+		expect(kindsByLine()[10]).toBe("value");
+	});
+
+	it("should classify dynamic imports as value", () => {
+		const dynamicFixtureDir = path.resolve(__dirname, "../../test-fixtures/dynamic-imports");
+		const project = createProject({ rootDir: dynamicFixtureDir });
+		const dynamicImports = collectImports(project, dynamicFixtureDir);
+
+		expect(dynamicImports.length).toBeGreaterThan(0);
+		expect(dynamicImports.every((importInfo) => importInfo.kind === "value")).toBe(true);
 	});
 });

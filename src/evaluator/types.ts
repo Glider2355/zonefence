@@ -1,14 +1,22 @@
+import type { UnanalyzableImport } from "../core/types.js";
+
+export type Severity = "error" | "warning";
+
+export type ViolationRule = "import-boundary" | "file-placement" | "dynamic-import";
+
 export interface Violation {
 	/** The file containing the violation */
 	sourceFile: string;
-	/** The import module specifier that caused the violation */
-	moduleSpecifier: string;
+	/** The import module specifier that caused the violation (import violations only) */
+	moduleSpecifier?: string;
 	/** Line number of the violation */
 	line: number;
 	/** Column number of the violation */
 	column: number;
 	/** The rule that was violated */
-	rule: "import-boundary";
+	rule: ViolationRule;
+	/** Only errors fail the check. Treated as `error` when omitted. */
+	severity?: Severity;
 	/** Error message */
 	message: string;
 	/** Path to the rule file that defined this rule */
@@ -37,4 +45,10 @@ export type PathsMapping = Record<string, string[]>;
 export interface EvaluateOptions {
 	/** Path alias mapping from tsconfig.json */
 	pathsMapping?: PathsMapping;
+	/** All files under the checked root, for `files.allow` / `files.require` */
+	files?: string[];
+	/** Dynamic imports with a non-literal specifier, reported as warnings */
+	unanalyzableImports?: UnanalyzableImport[];
+	/** Report warnings as errors */
+	strict?: boolean;
 }
