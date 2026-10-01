@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import type { z } from "zod";
+import { shouldSkipDirectory } from "../core/file-collector.js";
 import { validateConfig } from "./schema.js";
 import type { RulesByDirectory, ZoneFenceConfig } from "./types.js";
 
@@ -91,11 +92,6 @@ function parseRuleFile(filePath: string): ZoneFenceConfig {
 	}
 
 	return result.data;
-}
-
-function shouldSkipDirectory(name: string): boolean {
-	const skipDirs = ["node_modules", ".git", "dist", "build", "coverage"];
-	return skipDirs.includes(name) || name.startsWith(".");
 }
 
 export function loadRules(filePath: string): ZoneFenceConfig {

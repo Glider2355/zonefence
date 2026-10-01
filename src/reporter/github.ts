@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { EvaluationResult, Violation } from "../evaluator/types.js";
+import { exitCodeFor, isError } from "./types.js";
 
 /**
  * Escape a workflow command property value.
@@ -20,8 +21,8 @@ function escapeData(value: string): string {
 }
 
 /**
- * Format one violation as a GitHub Actions error annotation, so that it shows up
- * on the offending line of a pull request.
+ * Format one violation as a GitHub Actions error (or warning) annotation, so that
+ * it shows up on the offending line of a pull request.
  */
 export function formatGithubAnnotation(violation: Violation, cwd: string = process.cwd()): string {
 	const file = escapeProperty(path.relative(cwd, violation.sourceFile));
@@ -38,7 +39,9 @@ export function formatGithubAnnotation(violation: Violation, cwd: string = proce
 	const column = violation.column + 1;
 	const properties = `file=${file},line=${violation.line},col=${column},title=${title}`;
 
-	return `::error ${properties}::${escapeData(messageParts.join("\n"))}`;
+	const command = isError(violation) ? "error" : "warning";
+
+	return `::${command} ${properties}::${escapeData(messageParts.join("\n"))}`;
 }
 
 /**
@@ -54,5 +57,5 @@ export function reportToGithub(result: EvaluationResult, cwd: string = annotatio
 		console.log(formatGithubAnnotation(violation, cwd));
 	}
 
-	return result.violations.length > 0 ? 1 : 0;
+	return exitCodeFor(result);
 }

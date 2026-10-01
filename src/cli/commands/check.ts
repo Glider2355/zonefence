@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Project } from "ts-morph";
-import { collectImports } from "../../core/import-collector.js";
+import { collectFiles } from "../../core/file-collector.js";
+import { collectImportsWithDiagnostics } from "../../core/import-collector.js";
 import { createProject } from "../../core/project.js";
 import { evaluate } from "../../evaluator/index.js";
 import type { PathsMapping } from "../../evaluator/types.js";
@@ -21,6 +22,7 @@ export interface CheckOptions {
 	config?: string;
 	color?: boolean;
 	reporter?: string;
+	strict?: boolean;
 }
 
 function resolveReporter(value: string | undefined): ReporterName {
@@ -119,16 +121,7 @@ export async function checkCommand(targetPath: string, options: CheckOptions): P
 			rootDir: absolutePath,
 		});
 
-		const imports = collectImports(project, absolutePath);
-
-		if (imports.length === 0) {
-			if (quiet) {
-				report(reporter, { violations: [], filesChecked: 0, importsChecked: 0 }, false);
-			} else {
-				console.log("No imports found to check.");
-			}
-			process.exit(0);
-		}
+		const { imports, unanalyzable } = collectImportsWithDiagnostics(project, absolutePath);
 
 		const { rules, allDirectories } = await loadRulesForDirectoryWithAllDirs(absolutePath);
 		const resolvedRules = resolveRulesWithPatterns(rules, allDirectories);
@@ -136,7 +129,20 @@ export async function checkCommand(targetPath: string, options: CheckOptions): P
 		// Get paths mapping from tsconfig for pattern resolution
 		const pathsMapping = getPathsMapping(project, absolutePath, tsConfigFilePath);
 
-		const results = evaluate(imports, resolvedRules, absolutePath, { pathsMapping });
+		// Only walk the tree when some rule actually constrains files
+		const hasFileRules = resolvedRules.some((rule) => rule.config.files !== undefined);
+
+		const results = evaluate(imports, resolvedRules, absolutePath, {
+			pathsMapping,
+			files: hasFileRules ? collectFiles(absolutePath) : undefined,
+			unanalyzableImports: unanalyzable,
+			strict: options.strict,
+		});
+
+		if (imports.length === 0 && results.violations.length === 0 && !quiet) {
+			console.log("No imports found to check.");
+			process.exit(0);
+		}
 
 		const exitCode = report(reporter, results, options.color !== false);
 

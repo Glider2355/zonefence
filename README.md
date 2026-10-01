@@ -80,6 +80,9 @@ file and key instead of being silently ignored. `reason` is accepted as an alias
 | `imports.mode` | Evaluation mode (`allow-first`: allow list priority, `deny-first`: deny list priority) | `allow-first` |
 | `imports.allow[].from` / `imports.deny[].from` | Import pattern to match | Required |
 | `imports.allow[].message` / `imports.deny[].message` | Message shown when the rule is violated (alias: `reason`) | - |
+| `imports.allow[].kind` / `imports.deny[].kind` | Which imports the rule applies to: `type`, `value` or `any` (see [Type-only Imports](#type-only-imports)) | `any` |
+| `files.allow` | When set, only files matching one of these patterns may exist (see [File Placement Rules](#file-placement-rules)) | `[]` |
+| `files.require` | Files that must have a sibling file | `[]` |
 
 ### Evaluation Modes
 
@@ -143,6 +146,34 @@ directoryPatterns:
           - from: "./**"
 ```
 
+### Ancestor Patterns
+
+A pattern starting with `^/` is anchored at **any ancestor directory of the importing
+file**: `^/_components/**` matches `A/_components/**` for every directory `A` from the
+file's own directory up to the checked root.
+
+This expresses the colocation rule "private code may only be imported by its own page
+and the pages below it", which relative patterns cannot (`../../**/_components/**` also
+reaches into sibling pages):
+
+```yaml
+# src/zonefence.yaml
+directoryPatterns:
+  - pattern: "**/_components"
+    config:
+      imports:
+        allow:
+          - from: "^/_components/**"
+          - from: "^/_hooks/**"
+          - from: "^/_lib/**"
+```
+
+```
+app/novel/[id]/_components/Foo.tsx                            ← ancestor page
+app/novel/[id]/chapter/[chapterId]/edit/_components/Bar.tsx   ← may import Foo
+app/novel/[id]/assets/_components/Baz.tsx                     ← Bar may NOT import Baz (sibling page)
+```
+
 ### Path Aliases
 
 You can also use path aliases directly in patterns. This is useful when your codebase uses TypeScript path aliases like `@/`.
@@ -190,8 +221,96 @@ const Heavy = dynamic(() => import("@/app/foo/_components/Heavy"));      // chec
 const fs = require("node:fs");                                          // checked
 ```
 
-Calls whose specifier is not a string literal (a template literal or a variable) have
-no specifier to match against and are skipped.
+Calls whose specifier is not a string literal (a template literal with substitutions or
+a variable) have no specifier to match against. Inside a directory with import rules
+they are reported as a **warning**, which does not fail the check; pass `--strict` to
+make them errors.
+
+```
+src/core/loader.ts
+  4:8  warning  Cannot check import(`./${name}.js`): the specifier is not a string literal  (dynamic-import)
+```
+
+### Type-only Imports
+
+Add `kind` to a rule to treat type references and value references differently — for
+example "a use case may see the gateway's *types* (the port interface), but not its
+implementation":
+
+```yaml
+imports:
+  allow:
+    - from: "./**"
+    - from: "../gateway/**"
+      kind: type      # import type { X } / import { type X } only
+  deny:
+    - from: "../gateway/**"
+      kind: value
+      message: "Use cases must not depend on gateway implementations"
+```
+
+| `kind` | Matches |
+|--------|---------|
+| `type` | `import type { X }`, `import { type X, type Y }` (every binding is a type), `export type { X } from`, `export { type X } from`, `import type x = require()`, type-level `import("...").X` |
+| `value` | Everything else, including side-effect imports, `export * from`, dynamic `import()`, `require()` and `import x = require()` |
+| `any` (default) | Both |
+
+## File Placement Rules
+
+Besides imports, a rule can constrain which files a folder may or must contain.
+
+```yaml
+# src/api/routes/zonefence.yaml
+version: 1
+files:
+  allow:                       # only these file names may exist here
+    - "route.ts"
+    - "handler.ts"
+    - "index.ts"
+    - "*Dto.ts"
+    - "*.test.ts"
+  require:
+    - for: "**/*.test.ts"      # a test must sit next to the file it tests
+      sibling: "{stem}.{ts,tsx}"
+```
+
+```yaml
+# src/zonefence.yaml — works in directoryPatterns too
+directoryPatterns:
+  - pattern: "components/ui"
+    config:
+      files:
+        require:
+          - for: "**/*.tsx"
+            sibling: "{name}.stories.tsx"
+            exclude: ["**/*.test.tsx", "**/*.stories.tsx", "**/*Icon.tsx"]
+            message: "UI components must have a Storybook story"
+```
+
+| Option | Description |
+|--------|-------------|
+| `files.allow` | Glob patterns. When non-empty, every file must match at least one |
+| `files.require[].for` | Glob selecting the files that need a sibling |
+| `files.require[].sibling` | File name the sibling must have, in the same directory. A glob, with the placeholders below |
+| `files.require[].exclude` | Globs for files exempt from the requirement |
+| `files.require[].message` | Message shown when the sibling is missing |
+
+Placeholders in `sibling`, for a file named `Button.test.tsx`:
+
+| Placeholder | Value |
+|-------------|-------|
+| `{name}` | `Button.test` — the file name without its last extension |
+| `{stem}` | `Button` — the file name up to the first dot |
+| `{ext}` | `tsx` — the last extension |
+
+Patterns are matched against the path relative to the directory the rule applies to; a
+pattern without a slash also matches the bare file name, so `route.ts` applies in nested
+directories too. All files are checked regardless of extension, except dotfiles and
+`zonefence.yaml` itself; `scope.exclude` applies as usual.
+
+File rules are inherited like import rules. An inherited pattern that contains a path
+stays relative to the directory it was written in: `routes/**/route.ts` in
+`src/zonefence.yaml` means `src/routes/**/route.ts` for every directory below `src/`.
 
 ## Rule Inheritance
 
@@ -205,7 +324,8 @@ src/
 ```
 
 An inherited relative pattern keeps pointing at the same place: `./shared/**` written in
-`src/zonefence.yaml` still means `src/shared/**` for the files under `src/domain/`.
+`src/zonefence.yaml` still means `src/shared/**` for the files under `src/domain/`. The same holds for
+`files` patterns.
 
 With `scope.apply: self`, the rule applies only to the current folder and is not inherited by child folders.
 
@@ -270,6 +390,7 @@ scope:
 | `pattern` | Glob pattern to match directories (relative to the zonefence.yaml location) | Required |
 | `config.description` | Description for matched directories | - |
 | `config.imports` | Import rules for matched directories | - |
+| `config.files` | File placement rules for matched directories | - |
 | `config.mergeStrategy` | `"merge"` (combine with other rules) or `"override"` (replace) | `"merge"` |
 | `priority` | Higher priority patterns are applied first (when multiple patterns match) | `0` |
 
@@ -311,8 +432,10 @@ npx zonefence check [path] [options]
 | `-c, --config <path>` | Path to tsconfig.json |
 | `--no-color` | Disable colored output |
 | `--reporter <name>` | Output format: `console` (default), `json`, `github` |
+| `--strict` | Treat warnings as errors |
 
-Exit code is `1` when there is at least one violation, otherwise `0`.
+Exit code is `1` when there is at least one error, otherwise `0`. Warnings alone do not
+fail the check.
 
 ### Reporters
 
@@ -326,6 +449,7 @@ working directory:
       "file": "src/core/Novel.ts",
       "line": 3,
       "column": 0,
+      "severity": "error",
       "moduleSpecifier": "hono",
       "message": "Core layer cannot depend on an HTTP framework",
       "rule": "import-boundary",
@@ -333,12 +457,15 @@ working directory:
       "designIntent": "Core layer - pure business logic"
     }
   ],
-  "summary": { "errorCount": 1, "filesChecked": 4, "importsChecked": 12 }
+  "summary": { "errorCount": 1, "warningCount": 0, "filesChecked": 4, "importsChecked": 12 }
 }
 ```
 
-`--reporter github` emits GitHub Actions error annotations, so violations show up on
-the offending lines of a pull request:
+`rule` is `import-boundary`, `file-placement` or `dynamic-import`; `moduleSpecifier` is
+present for import violations only.
+
+`--reporter github` emits GitHub Actions annotations (`::error` / `::warning`), so
+violations show up on the offending lines of a pull request:
 
 ```
 ::error file=src/core/Novel.ts,line=3,col=1,title=zonefence(import-boundary)::Core layer cannot depend on an HTTP framework
@@ -351,6 +478,31 @@ the offending lines of a pull request:
 
 Annotation paths are relative to the repository root (`GITHUB_WORKSPACE`), so they also
 line up when the check runs from a package directory of a monorepo.
+
+## Generating Documentation
+
+`zonefence docs` renders the rule files as a Markdown table, so the written architecture
+guide is generated from what is actually enforced and cannot drift from it.
+
+```bash
+npx zonefence docs ./src --out docs/architecture.md
+```
+
+| Option | Description |
+|--------|-------------|
+| `-o, --out <file>` | Write to a file (printed to stdout when omitted) |
+| `--lang <lang>` | Language of the headings: `en` (default), `ja` |
+
+```markdown
+| Directory | Design intent | Allowed | Denied (reason) |
+| --- | --- | --- | --- |
+| `src/packages/novel/core` | Core layer - pure business logic | `@/packages/novel/core/**`, `neverthrow` | `hono` (Core cannot depend on an HTTP framework) |
+| `src/pages/**/containers` | Container layer | `../presenters/**` | `../containers/**` (Containers should not import from sibling containers) |
+```
+
+There is one row per directory with a `zonefence.yaml` and one per `directoryPatterns`
+entry, showing the rules as written (inheritance is not expanded). A `Files` column is
+added when any rule constrains files.
 
 ## Development
 

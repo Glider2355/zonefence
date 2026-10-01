@@ -705,3 +705,215 @@ describe("allow-first mode with relative path patterns (issue #8)", () => {
 		});
 	});
 });
+
+// See https://github.com/Glider2355/zonefence/issues/15
+describe("rule kind (type | value | any)", () => {
+	const rootDir = "/project/src";
+	const useCaseDir = `${rootDir}/novel/use-case`;
+
+	function createGatewayImport(kind?: "type" | "value"): ImportInfo {
+		return {
+			sourceFile: `${useCaseDir}/NovelUseCase.ts`,
+			moduleSpecifier: "../gateway/NovelGateway",
+			resolvedPath: `${rootDir}/novel/gateway/NovelGateway.ts`,
+			isExternal: false,
+			line: 1,
+			column: 0,
+			kind,
+		};
+	}
+
+	function createRuleWith(imports: NonNullable<ResolvedRule["config"]["imports"]>): ResolvedRule[] {
+		return [
+			{
+				directory: useCaseDir,
+				ruleFilePath: `${useCaseDir}/zonefence.yaml`,
+				excludePatterns: [],
+				config: { version: 1, imports },
+			},
+		];
+	}
+
+	describe("allow with kind: type", () => {
+		const rules = createRuleWith({
+			allow: [{ from: "./**" }, { from: "../gateway/**", kind: "type" }],
+		});
+
+		it("should allow a type-only import", () => {
+			expect(evaluateImportBoundary(createGatewayImport("type"), rules, rootDir)).toBeNull();
+		});
+
+		it("should reject a value import and say that only type imports are allowed", () => {
+			const result = evaluateImportBoundary(createGatewayImport("value"), rules, rootDir);
+
+			expect(result?.message).toBe(
+				'Import from "../gateway/NovelGateway" is not in the allow list (only type imports are allowed from "../gateway/**")',
+			);
+		});
+
+		it("should treat an import without a kind as a value import", () => {
+			expect(evaluateImportBoundary(createGatewayImport(), rules, rootDir)).not.toBeNull();
+		});
+	});
+
+	describe("deny with kind: value", () => {
+		const rules = createRuleWith({
+			deny: [
+				{
+					from: "../gateway/**",
+					kind: "value",
+					message: "use-case must not depend on gateway implementations",
+				},
+			],
+		});
+
+		it("should reject a value import with the rule's message", () => {
+			const result = evaluateImportBoundary(createGatewayImport("value"), rules, rootDir);
+
+			expect(result?.message).toBe("use-case must not depend on gateway implementations");
+		});
+
+		it("should let a type-only import through", () => {
+			expect(evaluateImportBoundary(createGatewayImport("type"), rules, rootDir)).toBeNull();
+		});
+	});
+
+	describe("kind: any and omitted kind", () => {
+		it("should match both kinds when kind is any", () => {
+			const rules = createRuleWith({ deny: [{ from: "../gateway/**", kind: "any" }] });
+
+			expect(evaluateImportBoundary(createGatewayImport("type"), rules, rootDir)).not.toBeNull();
+			expect(evaluateImportBoundary(createGatewayImport("value"), rules, rootDir)).not.toBeNull();
+		});
+
+		it("should match both kinds when kind is omitted", () => {
+			const rules = createRuleWith({ deny: [{ from: "../gateway/**" }] });
+
+			expect(evaluateImportBoundary(createGatewayImport("type"), rules, rootDir)).not.toBeNull();
+			expect(evaluateImportBoundary(createGatewayImport("value"), rules, rootDir)).not.toBeNull();
+		});
+	});
+
+	it("should apply kind in deny-first mode too", () => {
+		const rules = createRuleWith({
+			mode: "deny-first",
+			allow: [{ from: "../gateway/**", kind: "type" }],
+			deny: [{ from: "../gateway/**" }],
+		});
+
+		expect(evaluateImportBoundary(createGatewayImport("type"), rules, rootDir)).toBeNull();
+		expect(evaluateImportBoundary(createGatewayImport("value"), rules, rootDir)).not.toBeNull();
+	});
+});
+
+// See https://github.com/Glider2355/zonefence/issues/13
+describe("ancestor-scoped patterns (^/)", () => {
+	const rootDir = "/project/src";
+	const pageDir = `${rootDir}/app/novel/[id]`;
+	const editComponentsDir = `${pageDir}/chapter/[chapterId]/edit/_components`;
+
+	const rules: ResolvedRule[] = [
+		{
+			directory: editComponentsDir,
+			ruleFilePath: `${rootDir}/zonefence.yaml`,
+			excludePatterns: [],
+			config: {
+				version: 1,
+				imports: {
+					allow: [{ from: "^/_components/**" }, { from: "^/_hooks/**" }, { from: "react" }],
+				},
+			},
+		},
+	];
+
+	function importFromBar(moduleSpecifier: string, resolvedPath: string): ImportInfo {
+		return {
+			sourceFile: `${editComponentsDir}/Bar.tsx`,
+			moduleSpecifier,
+			resolvedPath,
+			isExternal: false,
+			line: 1,
+			column: 0,
+		};
+	}
+
+	it("should allow a private component of an ancestor page", () => {
+		const importInfo = importFromBar(
+			"@/app/novel/[id]/_components/Foo",
+			`${pageDir}/_components/Foo.tsx`,
+		);
+
+		expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+	});
+
+	it("should allow a private component of the page itself", () => {
+		const importInfo = importFromBar("./Sibling", `${editComponentsDir}/Sibling.tsx`);
+
+		expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+	});
+
+	it("should allow another private directory of an ancestor page", () => {
+		const importInfo = importFromBar(
+			"@/app/novel/[id]/chapter/_hooks/useChapter",
+			`${pageDir}/chapter/_hooks/useChapter.ts`,
+		);
+
+		expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+	});
+
+	it("should allow a private directory at the root", () => {
+		const importInfo = importFromBar("@/_components/Button", `${rootDir}/_components/Button.tsx`);
+
+		expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+	});
+
+	it("should reject a private component of a sibling page", () => {
+		const importInfo = importFromBar(
+			"@/app/novel/[id]/assets/_components/Baz",
+			`${pageDir}/assets/_components/Baz.tsx`,
+		);
+
+		expect(evaluateImportBoundary(importInfo, rules, rootDir)).not.toBeNull();
+	});
+
+	it("should allow anything nested inside the page's own private directory", () => {
+		const importInfo = importFromBar("./parts/Part", `${editComponentsDir}/parts/Part.tsx`);
+
+		expect(evaluateImportBoundary(importInfo, rules, rootDir)).toBeNull();
+	});
+
+	it("should reject a private component of a descendant page", () => {
+		const importInfo = importFromBar(
+			"../preview/_components/Preview",
+			`${pageDir}/chapter/[chapterId]/edit/preview/_components/Preview.tsx`,
+		);
+
+		expect(evaluateImportBoundary(importInfo, rules, rootDir)).not.toBeNull();
+	});
+
+	it("should reject a private component of an unrelated page", () => {
+		const importInfo = importFromBar(
+			"@/app/settings/_components/Panel",
+			`${rootDir}/app/settings/_components/Panel.tsx`,
+		);
+
+		expect(evaluateImportBoundary(importInfo, rules, rootDir)).not.toBeNull();
+	});
+
+	it("should work as a deny pattern", () => {
+		const denyRules: ResolvedRule[] = [
+			{
+				...rules[0],
+				config: {
+					version: 1,
+					imports: { deny: [{ from: "^/_legacy/**", message: "Legacy code is frozen" }] },
+				},
+			},
+		];
+		const importInfo = importFromBar("@/app/_legacy/old", `${rootDir}/app/_legacy/old.ts`);
+
+		expect(evaluateImportBoundary(importInfo, denyRules, rootDir)?.message).toBe(
+			"Legacy code is frozen",
+		);
+	});
+});

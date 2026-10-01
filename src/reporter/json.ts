@@ -1,11 +1,14 @@
 import path from "node:path";
-import type { EvaluationResult } from "../evaluator/types.js";
+import type { EvaluationResult, Severity } from "../evaluator/types.js";
+import { exitCodeFor, isError } from "./types.js";
 
 export interface JsonViolation {
 	file: string;
 	line: number;
 	column: number;
-	moduleSpecifier: string;
+	severity: Severity;
+	/** Present for import violations only */
+	moduleSpecifier?: string;
 	message: string;
 	rule: string;
 	ruleFilePath: string;
@@ -16,6 +19,7 @@ export interface JsonReport {
 	violations: JsonViolation[];
 	summary: {
 		errorCount: number;
+		warningCount: number;
 		filesChecked: number;
 		importsChecked: number;
 	};
@@ -30,17 +34,23 @@ export function buildJsonReport(result: EvaluationResult, cwd: string = process.
 		file: path.relative(cwd, violation.sourceFile),
 		line: violation.line,
 		column: violation.column,
-		moduleSpecifier: violation.moduleSpecifier,
+		severity: isError(violation) ? "error" : "warning",
+		...(violation.moduleSpecifier === undefined
+			? {}
+			: { moduleSpecifier: violation.moduleSpecifier }),
 		message: violation.message,
 		rule: violation.rule,
 		ruleFilePath: path.relative(cwd, violation.ruleFilePath),
 		...(violation.designIntent === undefined ? {} : { designIntent: violation.designIntent }),
 	}));
 
+	const errorCount = result.violations.filter(isError).length;
+
 	return {
 		violations,
 		summary: {
-			errorCount: violations.length,
+			errorCount,
+			warningCount: violations.length - errorCount,
 			filesChecked: result.filesChecked,
 			importsChecked: result.importsChecked,
 		},
@@ -50,5 +60,5 @@ export function buildJsonReport(result: EvaluationResult, cwd: string = process.
 export function reportToJson(result: EvaluationResult, cwd: string = process.cwd()): number {
 	console.log(JSON.stringify(buildJsonReport(result, cwd), null, 2));
 
-	return result.violations.length > 0 ? 1 : 0;
+	return exitCodeFor(result);
 }

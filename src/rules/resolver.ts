@@ -4,7 +4,14 @@ import {
 	collectPatternSources,
 	findMatchingPatterns,
 } from "./pattern-matcher.js";
-import type { ImportRule, ResolvedRule, RulesByDirectory, ZoneFenceConfig } from "./types.js";
+import type {
+	FileAllowRule,
+	FilesConfig,
+	ImportRule,
+	ResolvedRule,
+	RulesByDirectory,
+	ZoneFenceConfig,
+} from "./types.js";
 
 export function resolveRules(rulesByDirectory: RulesByDirectory): ResolvedRule[] {
 	const resolvedRules: ResolvedRule[] = [];
@@ -164,6 +171,9 @@ function applyPatternRule(base: ZoneFenceConfig, match: PatternMatch): ZoneFence
 						mode: config.imports.mode ?? base.imports?.mode ?? "allow-first",
 					}
 				: base.imports,
+			files: config.files
+				? { require: config.files.require ?? [], allow: config.files.allow ?? [] }
+				: base.files,
 		};
 	}
 
@@ -176,6 +186,7 @@ function applyPatternRule(base: ZoneFenceConfig, match: PatternMatch): ZoneFence
 			deny: mergeImportRules(base.imports?.deny, config.imports?.deny),
 			mode: config.imports?.mode ?? base.imports?.mode ?? "allow-first",
 		},
+		files: mergeFiles(base.files, config.files),
 	};
 }
 
@@ -209,33 +220,57 @@ function isRelativePattern(pattern: string): boolean {
 	return pattern.startsWith("./") || pattern.startsWith("../");
 }
 
+/** A file pattern without a slash matches the bare file name, wherever it is. */
+function dependsOnDirectory(pattern: string): boolean {
+	return pattern.includes("/");
+}
+
+/** The glob of a `files.allow` entry, whichever form it is in. */
+export function getFilePattern(rule: FileAllowRule): string {
+	return typeof rule === "string" ? rule : rule.pattern;
+}
+
 /**
  * Pin the relative patterns of a config to the directory it was written in.
  *
  * Once merged into a descendant's config the rules no longer say where they came
  * from, and `./shared/**` written in `src/` would be resolved against the
- * descendant instead.
+ * descendant instead. The same goes for `files` patterns that contain a path.
  */
 function anchorRelativePatterns(config: ZoneFenceConfig, directory: string): ZoneFenceConfig {
-	if (!config.imports) {
-		return config;
-	}
+	const anchored: ZoneFenceConfig = { ...config };
 
-	const anchor = (rules?: ImportRule[]): ImportRule[] | undefined =>
-		rules?.map((rule) =>
-			isRelativePattern(rule.from) && rule.baseDir === undefined
-				? { ...rule, baseDir: directory }
-				: rule,
-		);
+	if (config.imports) {
+		const anchor = (rules?: ImportRule[]): ImportRule[] | undefined =>
+			rules?.map((rule) =>
+				isRelativePattern(rule.from) && rule.baseDir === undefined
+					? { ...rule, baseDir: directory }
+					: rule,
+			);
 
-	return {
-		...config,
-		imports: {
+		anchored.imports = {
 			...config.imports,
 			allow: anchor(config.imports.allow),
 			deny: anchor(config.imports.deny),
-		},
-	};
+		};
+	}
+
+	if (config.files) {
+		anchored.files = {
+			allow: config.files.allow?.map((rule) =>
+				typeof rule === "string" && dependsOnDirectory(rule)
+					? { pattern: rule, baseDir: directory }
+					: rule,
+			),
+			require: config.files.require?.map((rule) =>
+				rule.baseDir === undefined && [rule.for, ...(rule.exclude ?? [])].some(dependsOnDirectory)
+					? { ...rule, baseDir: directory }
+					: rule,
+			),
+		};
+	}
+
+	return anchored;
 }
 
 function mergeConfigs(parents: ZoneFenceConfig[], child: ZoneFenceConfig): ZoneFenceConfig {
@@ -279,7 +314,24 @@ function mergeTwoConfigs(base: ZoneFenceConfig, override: ZoneFenceConfig): Zone
 		};
 	}
 
+	// Merge files
+	const files = mergeFiles(base.files, override.files);
+	if (files) {
+		merged.files = files;
+	}
+
 	return merged;
+}
+
+function mergeFiles(base?: FilesConfig, override?: FilesConfig): FilesConfig | undefined {
+	if (!base && !override) {
+		return undefined;
+	}
+
+	return {
+		require: mergeArrays(base?.require, override?.require),
+		allow: mergeArrays(base?.allow, override?.allow),
+	};
 }
 
 function mergeArrays<T>(base?: T[], override?: T[]): T[] {

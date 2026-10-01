@@ -1,26 +1,37 @@
 import path from "node:path";
 import {
 	type CallExpression,
+	type ExportDeclaration,
 	type ImportDeclaration,
+	type Node,
 	type Project,
 	SyntaxKind,
 	ts,
 } from "ts-morph";
 import type { SourceFile } from "ts-morph";
-import type { ImportInfo } from "./types.js";
+import type { CollectedImports, ImportInfo, ImportKind, UnanalyzableImport } from "./types.js";
 
 export function collectImports(project: Project, rootDir: string): ImportInfo[] {
-	const imports: ImportInfo[] = [];
+	return collectImportsWithDiagnostics(project, rootDir).imports;
+}
+
+/**
+ * Collect imports together with the dynamic calls that could not be analyzed
+ * because their specifier is not a string literal.
+ */
+export function collectImportsWithDiagnostics(project: Project, rootDir: string): CollectedImports {
+	const collected: CollectedImports = { imports: [], unanalyzable: [] };
 
 	for (const sourceFile of project.getSourceFiles()) {
 		const fileImports = collectImportsFromFile(sourceFile, rootDir);
-		imports.push(...fileImports);
+		collected.imports.push(...fileImports.imports);
+		collected.unanalyzable.push(...fileImports.unanalyzable);
 	}
 
-	return imports;
+	return collected;
 }
 
-function collectImportsFromFile(sourceFile: SourceFile, rootDir: string): ImportInfo[] {
+function collectImportsFromFile(sourceFile: SourceFile, rootDir: string): CollectedImports {
 	const imports: ImportInfo[] = [];
 	const filePath = sourceFile.getFilePath();
 
@@ -45,33 +56,80 @@ function collectImportsFromFile(sourceFile: SourceFile, rootDir: string): Import
 				isExternal: isExternalImport(specifierValue, resolvedPath),
 				line: startLine,
 				column: startColumn,
+				kind: getExportKind(exportDecl),
 			});
 		}
 	}
 
 	// Dynamic `import("...")` and `require("...")` calls, which otherwise bypass
 	// the fence entirely.
-	imports.push(...collectCallExpressionImports(sourceFile, filePath));
+	const calls = collectCallExpressionImports(sourceFile, filePath);
+	imports.push(...calls.imports);
+	imports.push(...collectOtherImportForms(sourceFile, filePath));
 
-	return imports;
+	return { imports, unanalyzable: calls.unanalyzable };
+}
+
+/**
+ * An import is type-only when the whole declaration is (`import type { X }`) or
+ * when every binding it introduces is (`import { type X, type Y }`).
+ */
+function getImportKind(importDecl: ImportDeclaration): ImportKind {
+	if (importDecl.isTypeOnly()) {
+		return "type";
+	}
+
+	if (importDecl.getDefaultImport() || importDecl.getNamespaceImport()) {
+		return "value";
+	}
+
+	const namedImports = importDecl.getNamedImports();
+	return namedImports.length > 0 && namedImports.every((named) => named.isTypeOnly())
+		? "type"
+		: "value";
+}
+
+/** Same as getImportKind, for `export type { X } from` / `export { type X } from`. */
+function getExportKind(exportDecl: ExportDeclaration): ImportKind {
+	if (exportDecl.isTypeOnly()) {
+		return "type";
+	}
+
+	const namedExports = exportDecl.getNamedExports();
+	return namedExports.length > 0 && namedExports.every((named) => named.isTypeOnly())
+		? "type"
+		: "value";
 }
 
 /**
  * Collect `import("...")` and `require("...")` calls with a string literal argument.
  *
- * Non-literal arguments (template literals, variables) are skipped: there is no
- * specifier to match a pattern against.
+ * Calls with a non-literal argument (template literals with substitutions,
+ * variables) have no specifier to match a pattern against; they are returned
+ * separately so that the caller can report them.
  */
-function collectCallExpressionImports(sourceFile: SourceFile, filePath: string): ImportInfo[] {
+function collectCallExpressionImports(sourceFile: SourceFile, filePath: string): CollectedImports {
 	const imports: ImportInfo[] = [];
+	const unanalyzable: UnanalyzableImport[] = [];
 
 	for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
 		if (!isModuleLoadingCall(call)) {
 			continue;
 		}
 
+		const line = call.getStartLineNumber();
+		const column = call.getStart() - call.getStartLinePos();
+
 		const [firstArgument] = call.getArguments();
-		if (!firstArgument?.isKind(SyntaxKind.StringLiteral)) {
+		if (!firstArgument) {
+			continue;
+		}
+
+		if (
+			!firstArgument.isKind(SyntaxKind.StringLiteral) &&
+			!firstArgument.isKind(SyntaxKind.NoSubstitutionTemplateLiteral)
+		) {
+			unanalyzable.push({ sourceFile: filePath, expression: call.getText(), line, column });
 			continue;
 		}
 
@@ -83,9 +141,59 @@ function collectCallExpressionImports(sourceFile: SourceFile, filePath: string):
 			moduleSpecifier,
 			resolvedPath,
 			isExternal: isExternalImport(moduleSpecifier, resolvedPath),
-			line: call.getStartLineNumber(),
-			column: call.getStart() - call.getStartLinePos(),
+			line,
+			column,
+			kind: "value",
 		});
+	}
+
+	return { imports, unanalyzable };
+}
+
+/**
+ * Collect the import forms that are neither a declaration nor a call:
+ * `import x = require("...")` and the type-level `import("...").X`.
+ */
+function collectOtherImportForms(sourceFile: SourceFile, filePath: string): ImportInfo[] {
+	const imports: ImportInfo[] = [];
+
+	const add = (node: Node, moduleSpecifier: string, kind: ImportKind) => {
+		const resolvedPath = resolveSpecifierInProject(sourceFile, filePath, moduleSpecifier);
+
+		imports.push({
+			sourceFile: filePath,
+			moduleSpecifier,
+			resolvedPath,
+			isExternal: isExternalImport(moduleSpecifier, resolvedPath),
+			line: node.getStartLineNumber(),
+			column: node.getStart() - node.getStartLinePos(),
+			kind,
+		});
+	};
+
+	for (const importEquals of sourceFile.getDescendantsOfKind(SyntaxKind.ImportEqualsDeclaration)) {
+		// `import x = Namespace.y` is an alias, not a module import
+		const specifier = importEquals
+			.getModuleReference()
+			.asKind(SyntaxKind.ExternalModuleReference)
+			?.getExpression()
+			?.asKind(SyntaxKind.StringLiteral);
+
+		if (specifier) {
+			add(importEquals, specifier.getLiteralValue(), importEquals.isTypeOnly() ? "type" : "value");
+		}
+	}
+
+	for (const importType of sourceFile.getDescendantsOfKind(SyntaxKind.ImportType)) {
+		const specifier = importType
+			.getArgument()
+			.asKind(SyntaxKind.LiteralType)
+			?.getLiteral()
+			.asKind(SyntaxKind.StringLiteral);
+
+		if (specifier) {
+			add(importType, specifier.getLiteralValue(), "type");
+		}
 	}
 
 	return imports;
@@ -184,6 +292,7 @@ function parseImportDeclaration(
 		isExternal: isExternalImport(moduleSpecifier, resolvedPath),
 		line: startLine,
 		column: startColumn,
+		kind: getImportKind(importDecl),
 	};
 }
 

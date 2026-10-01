@@ -1,5 +1,7 @@
 import type { ImportInfo } from "../core/types.js";
 import type { ResolvedRule } from "../rules/types.js";
+import { evaluateUnanalyzableImports } from "./dynamic-import.js";
+import { evaluateFilePlacement } from "./file-placement.js";
 import { evaluateImportBoundary } from "./import-boundary.js";
 import type { EvaluateOptions, EvaluationResult, Violation } from "./types.js";
 
@@ -21,6 +23,24 @@ export function evaluate(
 		}
 	}
 
+	if (options.unanalyzableImports) {
+		for (const call of options.unanalyzableImports) {
+			checkedFiles.add(call.sourceFile);
+		}
+		violations.push(
+			...evaluateUnanalyzableImports(
+				options.unanalyzableImports,
+				rules,
+				rootDir,
+				options.strict ? "error" : "warning",
+			),
+		);
+	}
+
+	if (options.files) {
+		violations.push(...evaluateFilePlacement(options.files, rules, rootDir));
+	}
+
 	return {
 		violations,
 		filesChecked: checkedFiles.size,
@@ -29,4 +49,6 @@ export function evaluate(
 }
 
 export { evaluateImportBoundary } from "./import-boundary.js";
-export type { EvaluationResult, Violation } from "./types.js";
+export { evaluateFilePlacement } from "./file-placement.js";
+export { evaluateUnanalyzableImports } from "./dynamic-import.js";
+export type { EvaluationResult, Severity, Violation, ViolationRule } from "./types.js";

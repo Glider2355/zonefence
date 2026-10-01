@@ -1,8 +1,22 @@
 import path from "node:path";
 import { escape as escapeGlob, minimatch } from "minimatch";
-import type { ImportInfo } from "../core/types.js";
+import type { ImportInfo, ImportKind } from "../core/types.js";
 import type { ImportRule, ResolvedRule } from "../rules/types.js";
+import { findApplicableRule, isExcluded } from "./rule-lookup.js";
 import type { EvaluateOptions, PathsMapping, Violation } from "./types.js";
+
+/** What a pattern needs to know about the import it is matched against. */
+interface MatchContext {
+	/** Directory that relative patterns (`./`, `../`) are resolved against */
+	patternBaseDir: string;
+	/** Directory of the importing file, the starting point of ancestor patterns (`^/`) */
+	sourceDir: string;
+	rootDir: string;
+	isExternal: boolean;
+	/** Whether the import is type-only */
+	importKind: ImportKind;
+	pathsMapping?: PathsMapping;
+}
 
 export function evaluateImportBoundary(
 	importInfo: ImportInfo,
@@ -24,10 +38,6 @@ export function evaluateImportBoundary(
 	}
 
 	const { config, ruleFilePath } = applicableRule;
-	// Relative patterns are resolved against the directory that owns the rule
-	// (for directoryPatterns, the matched directory), not against the directory of
-	// the importing file, so that a rule applies uniformly to nested files.
-	const patternBaseDir = applicableRule.directory;
 	const imports = config.imports;
 
 	if (!imports) {
@@ -40,44 +50,36 @@ export function evaluateImportBoundary(
 
 	// Get the path to match against (resolved path or module specifier)
 	const pathToMatch = getPathToMatch(importInfo, rootDir);
-
-	const isExternal = importInfo.isExternal;
-
 	const moduleSpecifier = importInfo.moduleSpecifier;
-	const pathsMapping = options.pathsMapping;
+
+	const context: MatchContext = {
+		// Relative patterns are resolved against the directory that owns the rule
+		// (for directoryPatterns, the matched directory), not against the directory of
+		// the importing file, so that a rule applies uniformly to nested files.
+		patternBaseDir: applicableRule.directory,
+		sourceDir: path.dirname(importInfo.sourceFile),
+		rootDir,
+		isExternal: importInfo.isExternal,
+		importKind: importInfo.kind ?? "value",
+		pathsMapping: options.pathsMapping,
+	};
 
 	if (mode === "allow-first") {
 		// Check deny rules first, then allow rules
-		const denyMatch = findMatchingRule(
-			pathToMatch,
-			moduleSpecifier,
-			denyRules,
-			patternBaseDir,
-			rootDir,
-			isExternal,
-			pathsMapping,
-		);
+		const denyMatch = findMatchingRule(pathToMatch, moduleSpecifier, denyRules, context);
 		if (denyMatch) {
 			return createViolation(importInfo, denyMatch, ruleFilePath, config.description);
 		}
 
 		// If there are allow rules, import must match at least one
 		if (allowRules.length > 0) {
-			const allowMatch = findMatchingRule(
-				pathToMatch,
-				moduleSpecifier,
-				allowRules,
-				patternBaseDir,
-				rootDir,
-				isExternal,
-				pathsMapping,
-			);
+			const allowMatch = findMatchingRule(pathToMatch, moduleSpecifier, allowRules, context);
 			if (!allowMatch) {
 				return createViolation(
 					importInfo,
 					{
 						from: pathToMatch,
-						message: `Import from "${importInfo.moduleSpecifier}" is not in the allow list`,
+						message: notInAllowListMessage(pathToMatch, moduleSpecifier, allowRules, context),
 					},
 					ruleFilePath,
 					config.description,
@@ -86,28 +88,12 @@ export function evaluateImportBoundary(
 		}
 	} else {
 		// deny-first: Check allow rules first, then deny rules
-		const allowMatch = findMatchingRule(
-			pathToMatch,
-			moduleSpecifier,
-			allowRules,
-			patternBaseDir,
-			rootDir,
-			isExternal,
-			pathsMapping,
-		);
+		const allowMatch = findMatchingRule(pathToMatch, moduleSpecifier, allowRules, context);
 		if (allowMatch) {
 			return null;
 		}
 
-		const denyMatch = findMatchingRule(
-			pathToMatch,
-			moduleSpecifier,
-			denyRules,
-			patternBaseDir,
-			rootDir,
-			isExternal,
-			pathsMapping,
-		);
+		const denyMatch = findMatchingRule(pathToMatch, moduleSpecifier, denyRules, context);
 		if (denyMatch) {
 			return createViolation(importInfo, denyMatch, ruleFilePath, config.description);
 		}
@@ -118,33 +104,26 @@ export function evaluateImportBoundary(
 	return null;
 }
 
-function findApplicableRule(filePath: string, rules: ResolvedRule[]): ResolvedRule | null {
-	// Find the most specific rule (deepest directory) that applies to this file
-	let mostSpecific: ResolvedRule | null = null;
+/**
+ * When the import would be allowed but for its kind (a value import of something
+ * that may only be imported as a type), say so instead of the generic message.
+ */
+function notInAllowListMessage(
+	pathToMatch: string,
+	moduleSpecifier: string,
+	allowRules: ImportRule[],
+	context: MatchContext,
+): string {
+	const base = `Import from "${moduleSpecifier}" is not in the allow list`;
+	const otherKindMatch = findMatchingRule(pathToMatch, moduleSpecifier, allowRules, context, {
+		ignoreKind: true,
+	});
 
-	for (const rule of rules) {
-		const relative = path.relative(rule.directory, filePath);
-		// Check if file is within this directory
-		if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
-			if (!mostSpecific || rule.directory.length > mostSpecific.directory.length) {
-				mostSpecific = rule;
-			}
-		}
+	if (!otherKindMatch?.kind || otherKindMatch.kind === "any") {
+		return base;
 	}
 
-	return mostSpecific;
-}
-
-function isExcluded(filePath: string, rule: ResolvedRule, rootDir: string): boolean {
-	const relativePath = path.relative(rootDir, filePath);
-
-	for (const pattern of rule.excludePatterns) {
-		if (minimatch(relativePath, pattern) || minimatch(path.basename(filePath), pattern)) {
-			return true;
-		}
-	}
-
-	return false;
+	return `${base} (only ${otherKindMatch.kind} imports are allowed from "${otherKindMatch.from}")`;
 }
 
 function getPathToMatch(importInfo: ImportInfo, rootDir: string): string {
@@ -173,28 +152,33 @@ function findMatchingRule(
 	pathToMatch: string,
 	moduleSpecifier: string,
 	rules: ImportRule[],
-	patternBaseDir: string,
-	rootDir: string,
-	isExternal: boolean,
-	pathsMapping?: PathsMapping,
+	context: MatchContext,
+	options: { ignoreKind?: boolean } = {},
 ): ImportRule | null {
 	for (const rule of rules) {
+		if (!options.ignoreKind && !matchesKind(rule, context.importKind)) {
+			continue;
+		}
 		// First, try matching against the resolved path
 		// A rule inherited from a parent directory stays relative to that parent
-		const baseDir = rule.baseDir ?? patternBaseDir;
-		if (matchesPattern(pathToMatch, rule.from, baseDir, rootDir, isExternal, pathsMapping)) {
+		const ruleContext = rule.baseDir ? { ...context, patternBaseDir: rule.baseDir } : context;
+		if (matchesPattern(pathToMatch, rule.from, ruleContext)) {
 			return rule;
 		}
 		// Also try matching against the original module specifier
 		// This allows patterns like "@/api/**" or "@image-router/*" to work
 		if (
 			pathToMatch !== moduleSpecifier &&
-			matchesPattern(moduleSpecifier, rule.from, baseDir, rootDir, isExternal, pathsMapping)
+			matchesPattern(moduleSpecifier, rule.from, ruleContext)
 		) {
 			return rule;
 		}
 	}
 	return null;
+}
+
+function matchesKind(rule: ImportRule, importKind: ImportKind): boolean {
+	return rule.kind === undefined || rule.kind === "any" || rule.kind === importKind;
 }
 
 /**
@@ -303,14 +287,51 @@ function resolveRelativePattern(pattern: string, baseDir: string, rootDir: strin
 	return escapedLiteral === "" ? glob : `${escapedLiteral}/${glob}`;
 }
 
-function matchesPattern(
+/** Prefix of a pattern anchored at any ancestor directory of the importing file. */
+const ANCESTOR_PREFIX = "^/";
+
+/**
+ * Match an ancestor-scoped pattern: `^/_components/**` matches `A/_components/**`
+ * for every directory `A` from the importing file's directory up to the root.
+ *
+ * This expresses colocation privacy ("only my page and its ancestors") that a
+ * relative pattern cannot: `../../**\/_components/**` would also reach into
+ * sibling pages.
+ */
+function matchesAncestorPattern(
 	pathToMatch: string,
 	pattern: string,
-	patternBaseDir: string,
-	rootDir: string,
-	isExternal: boolean,
-	pathsMapping?: PathsMapping,
+	context: MatchContext,
 ): boolean {
+	const relativePattern = `./${pattern.slice(ANCESTOR_PREFIX.length)}`;
+	let ancestor = context.sourceDir;
+
+	while (true) {
+		const relative = path.relative(context.rootDir, ancestor);
+		if (relative.startsWith("..") || path.isAbsolute(relative)) {
+			return false;
+		}
+
+		if (
+			minimatch(pathToMatch, resolveRelativePattern(relativePattern, ancestor, context.rootDir))
+		) {
+			return true;
+		}
+
+		if (relative === "") {
+			return false;
+		}
+		ancestor = path.dirname(ancestor);
+	}
+}
+
+function matchesPattern(pathToMatch: string, pattern: string, context: MatchContext): boolean {
+	const { patternBaseDir, rootDir, isExternal, pathsMapping } = context;
+
+	if (pattern.startsWith(ANCESTOR_PREFIX)) {
+		return matchesAncestorPattern(pathToMatch, pattern, context);
+	}
+
 	// Handle relative patterns (starting with ./ or ../)
 	if (pattern.startsWith("./") || pattern.startsWith("../")) {
 		const resolvedPattern = resolveRelativePattern(pattern, patternBaseDir, rootDir);

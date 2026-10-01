@@ -1,0 +1,13 @@
+version: 1
+description: "File placement fixture"
+
+directoryPatterns:
+  - pattern: "components/ui"
+    config:
+      description: "UI components need a story"
+      files:
+        require:
+          - for: "**/*.tsx"
+            sibling: "{name}.stories.tsx"
+            exclude: ["**/*.stories.tsx", "**/*Icon.tsx"]
+            message: "UI components must have a Storybook story"

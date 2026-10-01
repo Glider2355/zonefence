@@ -1,7 +1,11 @@
 import path from "node:path";
 import { Project } from "ts-morph";
 import { describe, expect, it } from "vitest";
-import { collectImports, isExternalImport } from "./import-collector.js";
+import {
+	collectImports,
+	collectImportsWithDiagnostics,
+	isExternalImport,
+} from "./import-collector.js";
 import { createProject } from "./project.js";
 import type { ImportInfo } from "./types.js";
 
@@ -119,6 +123,115 @@ describe("collectImports - dynamic import() and require()", () => {
 	});
 });
 
+// See https://github.com/Glider2355/zonefence/issues/14
+describe("collectImportsWithDiagnostics - non-literal specifiers", () => {
+	const fixtureDir = path.resolve(__dirname, "../../test-fixtures/dynamic-imports");
+
+	it("should report a dynamic import whose specifier is not a string literal", () => {
+		const project = createProject({ rootDir: fixtureDir });
+		const { unanalyzable } = collectImportsWithDiagnostics(project, fixtureDir);
+
+		expect(unanalyzable).toHaveLength(1);
+		expect(unanalyzable[0].sourceFile).toBe(path.join(fixtureDir, "consumer.ts"));
+		expect(unanalyzable[0].expression).toBe("import(`./${name}.js`)");
+		expect(unanalyzable[0].line).toBe(16);
+	});
+
+	it("should return the same imports as collectImports", () => {
+		const project = createProject({ rootDir: fixtureDir });
+
+		expect(collectImportsWithDiagnostics(project, fixtureDir).imports).toEqual(
+			collectImports(project, fixtureDir),
+		);
+	});
+
+	it("should treat a template literal without substitutions as a literal specifier", () => {
+		const project = new Project({ useInMemoryFileSystem: true });
+		project.createSourceFile("/src/a.ts", "export const load = () => import(`./b`);");
+		project.createSourceFile("/src/b.ts", "export const b = 1;");
+
+		const { imports, unanalyzable } = collectImportsWithDiagnostics(project, "/src");
+
+		expect(unanalyzable).toEqual([]);
+		expect(imports.map((importInfo) => importInfo.resolvedPath)).toEqual(["/src/b.ts"]);
+	});
+});
+
+// See https://github.com/Glider2355/zonefence/issues/15
+describe("collectImports - type-only imports", () => {
+	// Kept in memory rather than as a fixture file: a formatter would rewrite the
+	// inline `type` forms into `import type`, erasing the cases under test.
+	const consumerSource = [
+		'import type { NovelGateway } from "./port.js";',
+		'import { type NovelGateway as InlineTypeOnly } from "./port.js";',
+		'import { type NovelGateway as Mixed, gateway } from "./port.js";',
+		'import * as port from "./port.js";',
+		'import "./port.js";',
+		"",
+		'export type { NovelGateway as ReExportedType } from "./port.js";',
+		'export { type NovelGateway as InlineReExportedType } from "./port.js";',
+		'export { gateway as reExportedValue } from "./port.js";',
+		'export * from "./port.js";',
+	].join("\n");
+
+	let cachedKinds: Record<number, string | undefined> | undefined;
+
+	function kindsByLine(): Record<number, string | undefined> {
+		if (!cachedKinds) {
+			const project = new Project({ useInMemoryFileSystem: true });
+			project.createSourceFile(
+				"/src/port.ts",
+				"export interface NovelGateway {}\nexport const gateway: NovelGateway = {};",
+			);
+			project.createSourceFile("/src/consumer.ts", consumerSource);
+
+			const collected = collectImports(project, "/src").filter((importInfo) =>
+				importInfo.sourceFile.endsWith("consumer.ts"),
+			);
+			cachedKinds = Object.fromEntries(
+				collected.map((importInfo) => [importInfo.line, importInfo.kind]),
+			);
+		}
+		return cachedKinds;
+	}
+
+	it("should classify `import type` as type", () => {
+		expect(kindsByLine()[1]).toBe("type");
+	});
+
+	it("should classify an import whose named bindings are all inline types as type", () => {
+		expect(kindsByLine()[2]).toBe("type");
+	});
+
+	it("should classify a mixed type and value import as value", () => {
+		expect(kindsByLine()[3]).toBe("value");
+	});
+
+	it("should classify namespace and side-effect imports as value", () => {
+		expect(kindsByLine()[4]).toBe("value");
+		expect(kindsByLine()[5]).toBe("value");
+	});
+
+	it("should classify `export type { } from` and all-inline-type re-exports as type", () => {
+		expect(kindsByLine()[7]).toBe("type");
+		expect(kindsByLine()[8]).toBe("type");
+	});
+
+	it("should classify value re-exports and `export *` as value", () => {
+		expect(kindsByLine()[9]).toBe("value");
+		expect(kindsByLine()[10]).toBe("value");
+	});
+
+	it("should classify dynamic imports as value", () => {
+		const dynamicFixtureDir = path.resolve(__dirname, "../../test-fixtures/dynamic-imports");
+		const project = createProject({ rootDir: dynamicFixtureDir });
+		const dynamicImports = collectImports(project, dynamicFixtureDir);
+
+		expect(dynamicImports.length).toBeGreaterThan(0);
+		expect(dynamicImports.every((importInfo) => importInfo.kind === "value")).toBe(true);
+	});
+});
+
 describe("collectImports - dynamic imports through a path alias", () => {
 	function collectFrom(code: string): ImportInfo[] {
 		const project = new Project({
@@ -157,5 +270,64 @@ describe("collectImports - dynamic imports through a path alias", () => {
 
 		expect(call.resolvedPath).toBeNull();
 		expect(call.isExternal).toBe(true);
+	});
+});
+
+describe("collectImports - import-equals and import types", () => {
+	function collectFrom(code: string): ImportInfo[] {
+		const project = new Project({ useInMemoryFileSystem: true });
+		project.createSourceFile("/src/infra/db.ts", "export interface Db {}\nexport const db = 1;");
+		project.createSourceFile("/src/app/page.ts", code);
+
+		return collectImports(project, "/src").filter((importInfo) =>
+			importInfo.sourceFile.endsWith("page.ts"),
+		);
+	}
+
+	it("should collect `import x = require()` as a value import", () => {
+		const [importInfo, ...rest] = collectFrom(
+			'import db = require("../infra/db");\nexport { db };',
+		);
+
+		expect(rest).toEqual([]);
+		expect(importInfo).toMatchObject({
+			moduleSpecifier: "../infra/db",
+			resolvedPath: "/src/infra/db.ts",
+			isExternal: false,
+			line: 1,
+			kind: "value",
+		});
+	});
+
+	it("should classify `import type x = require()` as type", () => {
+		const [importInfo] = collectFrom(
+			'import type db = require("../infra/db");\nexport type { db };',
+		);
+
+		expect(importInfo.kind).toBe("type");
+	});
+
+	it("should not mistake a namespace alias for a module import", () => {
+		const collected = collectFrom(
+			"namespace A { export const b = 1; }\nimport b = A.b;\nexport { b };",
+		);
+
+		expect(collected).toEqual([]);
+	});
+
+	it("should collect a type-level import() as a type import", () => {
+		const collected = collectFrom(
+			'export type Db = import("../infra/db").Db;\nexport type Module = typeof import("../infra/db");',
+		);
+
+		expect(collected).toHaveLength(2);
+		for (const importInfo of collected) {
+			expect(importInfo).toMatchObject({
+				moduleSpecifier: "../infra/db",
+				resolvedPath: "/src/infra/db.ts",
+				kind: "type",
+			});
+		}
+		expect(collected.map((importInfo) => importInfo.line)).toEqual([1, 2]);
 	});
 });
