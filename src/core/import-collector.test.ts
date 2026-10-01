@@ -272,3 +272,62 @@ describe("collectImports - dynamic imports through a path alias", () => {
 		expect(call.isExternal).toBe(true);
 	});
 });
+
+describe("collectImports - import-equals and import types", () => {
+	function collectFrom(code: string): ImportInfo[] {
+		const project = new Project({ useInMemoryFileSystem: true });
+		project.createSourceFile("/src/infra/db.ts", "export interface Db {}\nexport const db = 1;");
+		project.createSourceFile("/src/app/page.ts", code);
+
+		return collectImports(project, "/src").filter((importInfo) =>
+			importInfo.sourceFile.endsWith("page.ts"),
+		);
+	}
+
+	it("should collect `import x = require()` as a value import", () => {
+		const [importInfo, ...rest] = collectFrom(
+			'import db = require("../infra/db");\nexport { db };',
+		);
+
+		expect(rest).toEqual([]);
+		expect(importInfo).toMatchObject({
+			moduleSpecifier: "../infra/db",
+			resolvedPath: "/src/infra/db.ts",
+			isExternal: false,
+			line: 1,
+			kind: "value",
+		});
+	});
+
+	it("should classify `import type x = require()` as type", () => {
+		const [importInfo] = collectFrom(
+			'import type db = require("../infra/db");\nexport type { db };',
+		);
+
+		expect(importInfo.kind).toBe("type");
+	});
+
+	it("should not mistake a namespace alias for a module import", () => {
+		const collected = collectFrom(
+			"namespace A { export const b = 1; }\nimport b = A.b;\nexport { b };",
+		);
+
+		expect(collected).toEqual([]);
+	});
+
+	it("should collect a type-level import() as a type import", () => {
+		const collected = collectFrom(
+			'export type Db = import("../infra/db").Db;\nexport type Module = typeof import("../infra/db");',
+		);
+
+		expect(collected).toHaveLength(2);
+		for (const importInfo of collected) {
+			expect(importInfo).toMatchObject({
+				moduleSpecifier: "../infra/db",
+				resolvedPath: "/src/infra/db.ts",
+				kind: "type",
+			});
+		}
+		expect(collected.map((importInfo) => importInfo.line)).toEqual([1, 2]);
+	});
+});

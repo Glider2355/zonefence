@@ -1,6 +1,7 @@
 import path from "node:path";
 import { escape as escapeGlob, minimatch } from "minimatch";
-import type { FileRequireRule, ResolvedRule } from "../rules/types.js";
+import { getFilePattern } from "../rules/resolver.js";
+import type { FileAllowRule, FileRequireRule, ResolvedRule } from "../rules/types.js";
 import { findApplicableRule, isExcluded } from "./rule-lookup.js";
 import type { Violation } from "./types.js";
 
@@ -30,21 +31,19 @@ export function evaluateFilePlacement(
 		const fileName = path.basename(filePath);
 		const allow = filesConfig.allow ?? [];
 
-		if (
-			allow.length > 0 &&
-			!allow.some((pattern) => matchesFilePattern(filePath, pattern, rule.directory))
-		) {
+		if (allow.length > 0 && !allow.some((entry) => isAllowedBy(filePath, entry, rule.directory))) {
 			violations.push(
 				createViolation(
 					filePath,
-					`File "${fileName}" is not allowed here (allowed: ${allow.join(", ")})`,
+					`File "${fileName}" is not allowed here (allowed: ${allow.map(getFilePattern).join(", ")})`,
 					rule,
 				),
 			);
 		}
 
 		for (const requirement of filesConfig.require ?? []) {
-			if (!isSubjectTo(filePath, requirement, rule.directory)) {
+			// A rule inherited from a parent directory stays relative to that parent
+			if (!isSubjectTo(filePath, requirement, requirement.baseDir ?? rule.directory)) {
 				continue;
 			}
 
@@ -92,6 +91,12 @@ function matchesFilePattern(filePath: string, pattern: string, baseDir: string):
 	}
 
 	return !pattern.includes("/") && minimatch(path.basename(filePath), pattern, { dot: true });
+}
+
+function isAllowedBy(filePath: string, rule: FileAllowRule, ruleDirectory: string): boolean {
+	return typeof rule === "string"
+		? matchesFilePattern(filePath, rule, ruleDirectory)
+		: matchesFilePattern(filePath, rule.pattern, rule.baseDir);
 }
 
 function isSubjectTo(filePath: string, requirement: FileRequireRule, baseDir: string): boolean {

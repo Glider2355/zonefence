@@ -5,6 +5,7 @@ import {
 	findMatchingPatterns,
 } from "./pattern-matcher.js";
 import type {
+	FileAllowRule,
 	FilesConfig,
 	ImportRule,
 	ResolvedRule,
@@ -219,33 +220,57 @@ function isRelativePattern(pattern: string): boolean {
 	return pattern.startsWith("./") || pattern.startsWith("../");
 }
 
+/** A file pattern without a slash matches the bare file name, wherever it is. */
+function dependsOnDirectory(pattern: string): boolean {
+	return pattern.includes("/");
+}
+
+/** The glob of a `files.allow` entry, whichever form it is in. */
+export function getFilePattern(rule: FileAllowRule): string {
+	return typeof rule === "string" ? rule : rule.pattern;
+}
+
 /**
  * Pin the relative patterns of a config to the directory it was written in.
  *
  * Once merged into a descendant's config the rules no longer say where they came
  * from, and `./shared/**` written in `src/` would be resolved against the
- * descendant instead.
+ * descendant instead. The same goes for `files` patterns that contain a path.
  */
 function anchorRelativePatterns(config: ZoneFenceConfig, directory: string): ZoneFenceConfig {
-	if (!config.imports) {
-		return config;
-	}
+	const anchored: ZoneFenceConfig = { ...config };
 
-	const anchor = (rules?: ImportRule[]): ImportRule[] | undefined =>
-		rules?.map((rule) =>
-			isRelativePattern(rule.from) && rule.baseDir === undefined
-				? { ...rule, baseDir: directory }
-				: rule,
-		);
+	if (config.imports) {
+		const anchor = (rules?: ImportRule[]): ImportRule[] | undefined =>
+			rules?.map((rule) =>
+				isRelativePattern(rule.from) && rule.baseDir === undefined
+					? { ...rule, baseDir: directory }
+					: rule,
+			);
 
-	return {
-		...config,
-		imports: {
+		anchored.imports = {
 			...config.imports,
 			allow: anchor(config.imports.allow),
 			deny: anchor(config.imports.deny),
-		},
-	};
+		};
+	}
+
+	if (config.files) {
+		anchored.files = {
+			allow: config.files.allow?.map((rule) =>
+				typeof rule === "string" && dependsOnDirectory(rule)
+					? { pattern: rule, baseDir: directory }
+					: rule,
+			),
+			require: config.files.require?.map((rule) =>
+				rule.baseDir === undefined && [rule.for, ...(rule.exclude ?? [])].some(dependsOnDirectory)
+					? { ...rule, baseDir: directory }
+					: rule,
+			),
+		};
+	}
+
+	return anchored;
 }
 
 function mergeConfigs(parents: ZoneFenceConfig[], child: ZoneFenceConfig): ZoneFenceConfig {

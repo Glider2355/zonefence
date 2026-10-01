@@ -1,4 +1,5 @@
 import path from "node:path";
+import { getFilePattern } from "../rules/resolver.js";
 import type {
 	FilesConfig,
 	ImportRule,
@@ -185,7 +186,7 @@ function formatFileRules(files: FilesConfig | undefined, labels: Labels): string
 	const parts: string[] = [];
 
 	if (files?.allow && files.allow.length > 0) {
-		parts.push(labels.onlyFiles(files.allow.map(code).join(", ")));
+		parts.push(labels.onlyFiles(files.allow.map((rule) => code(getFilePattern(rule))).join(", ")));
 	}
 
 	for (const requirement of files?.require ?? []) {

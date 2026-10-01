@@ -30,6 +30,7 @@ export type {
 	ZoneFenceConfig,
 	ImportRule,
 	ImportRuleKind,
+	FileAllowRule,
 	FilesConfig,
 	FileRequireRule,
 	DirectoryPatternRule,

@@ -247,8 +247,8 @@ imports:
 
 | `kind` | 対象 |
 |--------|------|
-| `type` | `import type { X }`、`import { type X, type Y }`（全ての束縛が型）、`export type { X } from`、`export { type X } from` |
-| `value` | 上記以外。副作用 import、`export * from`、動的 `import()`、`require()` を含む |
+| `type` | `import type { X }`、`import { type X, type Y }`（全ての束縛が型）、`export type { X } from`、`export { type X } from`、`import type x = require()`、型位置の `import("...").X` |
+| `value` | 上記以外。副作用 import、`export * from`、動的 `import()`、`require()`、`import x = require()` を含む |
 | `any`（デフォルト） | 両方 |
 
 ## ファイル配置ルール
@@ -304,6 +304,10 @@ directoryPatterns:
 拡張子を問わず全てのファイルが対象ですが、ドットファイルと `zonefence.yaml` 自体は除きます。
 `scope.exclude` は通常どおり適用されます。
 
+ファイル配置ルールも import ルールと同様に継承されます。継承されたパターンのうちパスを含むものは、
+書かれたディレクトリからの相対のままです。`src/zonefence.yaml` の `routes/**/route.ts` は、
+`src/` 配下のどのディレクトリに対しても `src/routes/**/route.ts` を指します。
+
 ## ルールの継承
 
 親フォルダのルールは子フォルダに継承されます。子フォルダで定義したルールは親のルールとマージされます。
@@ -316,7 +320,7 @@ src/
 ```
 
 継承された相対パターンは、書かれた場所を基準にしたままです。`src/zonefence.yaml` に書いた
-`./shared/**` は、`src/domain/` 配下のファイルに対しても `src/shared/**` を指します。
+`./shared/**` は、`src/domain/` 配下のファイルに対しても `src/shared/**` を指します。`files` のパターンも同様です。
 
 `scope.apply: self` を指定すると、そのルールは自フォルダのみに適用され、子フォルダには継承されません。
 

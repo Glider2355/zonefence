@@ -251,8 +251,8 @@ imports:
 
 | `kind` | Matches |
 |--------|---------|
-| `type` | `import type { X }`, `import { type X, type Y }` (every binding is a type), `export type { X } from`, `export { type X } from` |
-| `value` | Everything else, including side-effect imports, `export * from`, dynamic `import()` and `require()` |
+| `type` | `import type { X }`, `import { type X, type Y }` (every binding is a type), `export type { X } from`, `export { type X } from`, `import type x = require()`, type-level `import("...").X` |
+| `value` | Everything else, including side-effect imports, `export * from`, dynamic `import()`, `require()` and `import x = require()` |
 | `any` (default) | Both |
 
 ## File Placement Rules
@@ -308,6 +308,10 @@ pattern without a slash also matches the bare file name, so `route.ts` applies i
 directories too. All files are checked regardless of extension, except dotfiles and
 `zonefence.yaml` itself; `scope.exclude` applies as usual.
 
+File rules are inherited like import rules. An inherited pattern that contains a path
+stays relative to the directory it was written in: `routes/**/route.ts` in
+`src/zonefence.yaml` means `src/routes/**/route.ts` for every directory below `src/`.
+
 ## Rule Inheritance
 
 Parent folder rules are inherited by child folders. Rules defined in child folders are merged with parent rules.
@@ -320,7 +324,8 @@ src/
 ```
 
 An inherited relative pattern keeps pointing at the same place: `./shared/**` written in
-`src/zonefence.yaml` still means `src/shared/**` for the files under `src/domain/`.
+`src/zonefence.yaml` still means `src/shared/**` for the files under `src/domain/`. The same holds for
+`files` patterns.
 
 With `scope.apply: self`, the rule applies only to the current folder and is not inherited by child folders.
 

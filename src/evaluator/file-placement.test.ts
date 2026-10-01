@@ -166,6 +166,36 @@ describe("evaluateFilePlacement", () => {
 		});
 	});
 
+	describe("rules inherited from a parent directory", () => {
+		const usersDir = `${rootDir}/routes/users`;
+		// As resolved for `routes/users`, which has its own zonefence.yaml below `src`
+		const rules = createRule(usersDir, {
+			allow: [{ pattern: "routes/**/route.ts", baseDir: rootDir }, "*.md"],
+			require: [{ for: "routes/**/route.ts", sibling: "{stem}.test.ts", baseDir: rootDir }],
+		});
+
+		it("should match an inherited pattern against the path from the parent directory", () => {
+			const files = [`${usersDir}/route.ts`, `${usersDir}/route.test.ts`, `${usersDir}/README.md`];
+
+			expect(evaluateFilePlacement(files, rules, rootDir).map((v) => v.sourceFile)).toEqual([
+				`${usersDir}/route.test.ts`,
+			]);
+		});
+
+		it("should apply an inherited requirement and show the pattern as written", () => {
+			const violations = evaluateFilePlacement(
+				[`${usersDir}/deep/route.ts`, `${usersDir}/other.ts`],
+				rules,
+				rootDir,
+			);
+
+			expect(violations.map((v) => v.message)).toEqual([
+				'Missing "route.test.ts" next to "route.ts"',
+				'File "other.ts" is not allowed here (allowed: routes/**/route.ts, *.md)',
+			]);
+		});
+	});
+
 	describe("end to end with a fixture", () => {
 		const fixtureDir = path.resolve(__dirname, "../../test-fixtures/file-placement/src");
 

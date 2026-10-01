@@ -393,3 +393,52 @@ describe("inherited relative patterns", () => {
 		expect(src?.config.imports?.allow).toEqual([{ from: "./shared/**" }, { from: "lodash" }]);
 	});
 });
+
+describe("inherited files patterns", () => {
+	const rulesByDirectory: RulesByDirectory = {
+		"/root/src": {
+			config: {
+				version: 1,
+				files: {
+					allow: ["routes/**/route.ts", "*.md"],
+					require: [
+						{ for: "routes/**/route.ts", sibling: "{stem}.test.ts" },
+						{ for: "*.tsx", sibling: "{name}.stories.tsx" },
+						{ for: "*.ts", sibling: "{stem}.test.ts", exclude: ["generated/**"] },
+					],
+				},
+			},
+			ruleFilePath: "/root/src/zonefence.yaml",
+		},
+		"/root/src/routes/users": {
+			config: { version: 1, files: { allow: ["dto/*.ts"] } },
+			ruleFilePath: "/root/src/routes/users/zonefence.yaml",
+		},
+	};
+
+	it("should pin inherited patterns that contain a path to the parent directory", () => {
+		const users = resolveRules(rulesByDirectory).find(
+			(rule) => rule.directory === "/root/src/routes/users",
+		);
+
+		expect(users?.config.files).toEqual({
+			allow: [{ pattern: "routes/**/route.ts", baseDir: "/root/src" }, "*.md", "dto/*.ts"],
+			require: [
+				{ for: "routes/**/route.ts", sibling: "{stem}.test.ts", baseDir: "/root/src" },
+				{ for: "*.tsx", sibling: "{name}.stories.tsx" },
+				{
+					for: "*.ts",
+					sibling: "{stem}.test.ts",
+					exclude: ["generated/**"],
+					baseDir: "/root/src",
+				},
+			],
+		});
+	});
+
+	it("should leave the rules of the directory that wrote them untouched", () => {
+		const src = resolveRules(rulesByDirectory).find((rule) => rule.directory === "/root/src");
+
+		expect(src?.config.files).toEqual(rulesByDirectory["/root/src"].config.files);
+	});
+});

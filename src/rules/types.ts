@@ -30,12 +30,24 @@ export interface FileRequireRule {
 	/** Globs for files that are exempt from this requirement */
 	exclude?: string[];
 	message?: string;
+	/**
+	 * Directory `for` and `exclude` are relative to. Set by the resolver on rules
+	 * inherited from a parent directory; otherwise the directory the rule applies to.
+	 */
+	baseDir?: string;
 }
+
+/**
+ * A `files.allow` glob. Written as a plain string; the resolver turns a pattern
+ * inherited from a parent directory into the object form to record the directory
+ * it is relative to.
+ */
+export type FileAllowRule = string | { pattern: string; baseDir: string };
 
 export interface FilesConfig {
 	require?: FileRequireRule[];
 	/** When non-empty, only files matching one of these globs may exist */
-	allow?: string[];
+	allow?: FileAllowRule[];
 }
 
 export interface PatternRuleConfig {

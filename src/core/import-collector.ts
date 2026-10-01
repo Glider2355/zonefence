@@ -3,6 +3,7 @@ import {
 	type CallExpression,
 	type ExportDeclaration,
 	type ImportDeclaration,
+	type Node,
 	type Project,
 	SyntaxKind,
 	ts,
@@ -64,6 +65,7 @@ function collectImportsFromFile(sourceFile: SourceFile, rootDir: string): Collec
 	// the fence entirely.
 	const calls = collectCallExpressionImports(sourceFile, filePath);
 	imports.push(...calls.imports);
+	imports.push(...collectOtherImportForms(sourceFile, filePath));
 
 	return { imports, unanalyzable: calls.unanalyzable };
 }
@@ -146,6 +148,55 @@ function collectCallExpressionImports(sourceFile: SourceFile, filePath: string):
 	}
 
 	return { imports, unanalyzable };
+}
+
+/**
+ * Collect the import forms that are neither a declaration nor a call:
+ * `import x = require("...")` and the type-level `import("...").X`.
+ */
+function collectOtherImportForms(sourceFile: SourceFile, filePath: string): ImportInfo[] {
+	const imports: ImportInfo[] = [];
+
+	const add = (node: Node, moduleSpecifier: string, kind: ImportKind) => {
+		const resolvedPath = resolveSpecifierInProject(sourceFile, filePath, moduleSpecifier);
+
+		imports.push({
+			sourceFile: filePath,
+			moduleSpecifier,
+			resolvedPath,
+			isExternal: isExternalImport(moduleSpecifier, resolvedPath),
+			line: node.getStartLineNumber(),
+			column: node.getStart() - node.getStartLinePos(),
+			kind,
+		});
+	};
+
+	for (const importEquals of sourceFile.getDescendantsOfKind(SyntaxKind.ImportEqualsDeclaration)) {
+		// `import x = Namespace.y` is an alias, not a module import
+		const specifier = importEquals
+			.getModuleReference()
+			.asKind(SyntaxKind.ExternalModuleReference)
+			?.getExpression()
+			?.asKind(SyntaxKind.StringLiteral);
+
+		if (specifier) {
+			add(importEquals, specifier.getLiteralValue(), importEquals.isTypeOnly() ? "type" : "value");
+		}
+	}
+
+	for (const importType of sourceFile.getDescendantsOfKind(SyntaxKind.ImportType)) {
+		const specifier = importType
+			.getArgument()
+			.asKind(SyntaxKind.LiteralType)
+			?.getLiteral()
+			.asKind(SyntaxKind.StringLiteral);
+
+		if (specifier) {
+			add(importType, specifier.getLiteralValue(), "type");
+		}
+	}
+
+	return imports;
 }
 
 function isModuleLoadingCall(call: CallExpression): boolean {
