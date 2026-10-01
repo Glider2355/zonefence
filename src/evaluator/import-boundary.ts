@@ -180,14 +180,16 @@ function findMatchingRule(
 ): ImportRule | null {
 	for (const rule of rules) {
 		// First, try matching against the resolved path
-		if (matchesPattern(pathToMatch, rule.from, patternBaseDir, rootDir, isExternal, pathsMapping)) {
+		// A rule inherited from a parent directory stays relative to that parent
+		const baseDir = rule.baseDir ?? patternBaseDir;
+		if (matchesPattern(pathToMatch, rule.from, baseDir, rootDir, isExternal, pathsMapping)) {
 			return rule;
 		}
 		// Also try matching against the original module specifier
 		// This allows patterns like "@/api/**" or "@image-router/*" to work
 		if (
 			pathToMatch !== moduleSpecifier &&
-			matchesPattern(moduleSpecifier, rule.from, patternBaseDir, rootDir, isExternal, pathsMapping)
+			matchesPattern(moduleSpecifier, rule.from, baseDir, rootDir, isExternal, pathsMapping)
 		) {
 			return rule;
 		}

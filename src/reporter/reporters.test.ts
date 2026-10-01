@@ -73,7 +73,11 @@ describe("formatGithubAnnotation", () => {
 		expect(annotation).toContain("::error ");
 		expect(annotation).toContain("file=src/core/Novel.ts");
 		expect(annotation).toContain("line=3");
-		expect(annotation).toContain("col=0");
+	});
+
+	it("should report a 1-based column, as annotations expect", () => {
+		expect(formatGithubAnnotation(createViolation({ column: 0 }), CWD)).toContain(",col=1,");
+		expect(formatGithubAnnotation(createViolation({ column: 16 }), CWD)).toContain(",col=17,");
 	});
 
 	it("should include the message, design intent and rule file", () => {

@@ -58,6 +58,22 @@ describe("zoneFenceConfigSchema", () => {
 			expect(result.success).toBe(false);
 		});
 
+		it("should name the offending key of an import rule", () => {
+			const result = validateConfig({
+				version: 1,
+				imports: { deny: [{ from: "hono", mesage: "typo" }] },
+			});
+
+			expect(result.success).toBe(false);
+			if (result.success) return;
+			expect(result.error.issues).toHaveLength(1);
+			expect(result.error.issues[0]).toMatchObject({
+				code: "unrecognized_keys",
+				keys: ["mesage"],
+				path: ["imports", "deny", 0],
+			});
+		});
+
 		it("should reject an unknown top-level key", () => {
 			const result = validateConfig({ version: 1, importz: {} });
 

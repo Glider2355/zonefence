@@ -1,5 +1,11 @@
 import path from "node:path";
-import { type CallExpression, type ImportDeclaration, type Project, SyntaxKind } from "ts-morph";
+import {
+	type CallExpression,
+	type ImportDeclaration,
+	type Project,
+	SyntaxKind,
+	ts,
+} from "ts-morph";
 import type { SourceFile } from "ts-morph";
 import type { ImportInfo } from "./types.js";
 
@@ -98,15 +104,40 @@ function isModuleLoadingCall(call: CallExpression): boolean {
 }
 
 /**
- * Resolve a relative specifier against the files already loaded into the project.
+ * Resolve the specifier of a dynamic `import()` / `require()` call.
  *
  * ts-morph offers no `getModuleSpecifierSourceFile` for call expressions, so this
- * walks the usual TypeScript candidates. Alias and bare specifiers are left
- * unresolved; the evaluator matches those against the specifier itself (and the
- * tsconfig paths mapping).
+ * asks TypeScript's module resolution directly. That way a call resolves exactly
+ * like the equivalent import declaration -- tsconfig `paths` aliases included --
+ * and cannot slip past a rule written against the resolved path.
  */
 function resolveSpecifierInProject(
 	sourceFile: SourceFile,
+	filePath: string,
+	moduleSpecifier: string,
+): string | null {
+	const project = sourceFile.getProject();
+	const { resolvedModule } = ts.resolveModuleName(
+		moduleSpecifier,
+		filePath,
+		project.getCompilerOptions(),
+		project.getModuleResolutionHost(),
+	);
+
+	if (resolvedModule) {
+		return resolvedModule.resolvedFileName;
+	}
+
+	return resolveRelativeSpecifierInProject(project, filePath, moduleSpecifier);
+}
+
+/**
+ * Fallback for relative specifiers the compiler options do not resolve (e.g. a
+ * ".js" specifier under classic resolution): look for the usual TypeScript
+ * candidates among the files loaded into the project.
+ */
+function resolveRelativeSpecifierInProject(
+	project: Project,
 	filePath: string,
 	moduleSpecifier: string,
 ): string | null {
@@ -114,7 +145,6 @@ function resolveSpecifierInProject(
 		return null;
 	}
 
-	const project = sourceFile.getProject();
 	const base = path.resolve(path.dirname(filePath), moduleSpecifier);
 
 	// A ".js" specifier in a TS project usually points at the ".ts" source

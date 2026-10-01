@@ -20,10 +20,13 @@ const importRuleObjectSchema = z
 		return resolvedMessage === undefined ? { from } : { from, message: resolvedMessage };
 	});
 
-const importRuleSchema = z.union([
-	z.string().transform((from): ImportRule => ({ from })),
+// A bare string is shorthand for `{ from }`. It is expanded up front rather than
+// offered as a union member: a union reports a bare "Invalid input" on failure,
+// hiding which key of the object form was wrong.
+const importRuleSchema = z.preprocess(
+	(value) => (typeof value === "string" ? { from: value } : value),
 	importRuleObjectSchema,
-]);
+);
 
 const importsSchema = z
 	.object({
